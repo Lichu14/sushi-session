@@ -1,0 +1,6 @@
+{
+  "name": "@sushi-session/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Espacio reservado para tipos y utilidades TypeScript compartidos"
+}

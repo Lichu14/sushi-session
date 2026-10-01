@@ -1,0 +1,17 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Keep automatically installed peers aligned with Expo SDK 57 / React Native 0.86.
+overrides:
+  '@types/react-dom': '19.2.7'
+  '@react-native/metro-config': '0.86.3'
+  react-native-worklets: '0.10.1'
+  react-native-reanimated: '4.5.1'
+
+# Prisma's engine installation scripts are required by its CLI.
+allowBuilds:
+  '@prisma/engines': true
+  prisma: true
+  # Native resolver used by Next.js ESLint configuration.
+  unrs-resolver: true

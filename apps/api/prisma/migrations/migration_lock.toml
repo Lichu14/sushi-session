@@ -1,0 +1,2 @@
+# Managed by Prisma Migrate. Keep this file in version control.
+provider = "postgresql"

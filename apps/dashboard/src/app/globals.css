@@ -1,0 +1,122 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #f6f7f8;
+  color: #20252b;
+  font-family: system-ui, sans-serif;
+}
+main {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+header,
+.toolbar,
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+header {
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+h1 {
+  font-size: 1.7rem;
+  margin: 0;
+}
+h2 {
+  font-size: 1.2rem;
+}
+section,
+article {
+  background: white;
+  border: 1px solid #d9dfe4;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+form.login {
+  max-width: 400px;
+  display: grid;
+  gap: 16px;
+}
+label {
+  display: grid;
+  gap: 6px;
+}
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid #76828b;
+  border-radius: 5px;
+}
+textarea {
+  width: 100%;
+  min-height: 85px;
+  resize: vertical;
+}
+button {
+  cursor: pointer;
+  background: #205a45;
+  color: white;
+}
+button.secondary {
+  background: white;
+  color: #263b32;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+:focus-visible {
+  outline: 3px solid #3282c5;
+  outline-offset: 3px;
+}
+.error {
+  color: #9f2424;
+  background: #fff0f0;
+  padding: 14px;
+  border-left: 4px solid #bb3232;
+}
+.notice {
+  color: #18573d;
+  background: #e8f6ee;
+  padding: 12px;
+}
+.muted {
+  color: #52616c;
+  font-size: 0.92rem;
+}
+.toolbar {
+  margin: 20px 0;
+  align-items: end;
+}
+.visit-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.reject-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+.actions {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  main {
+    padding: 20px 12px;
+  }
+  .toolbar label {
+    width: 100%;
+  }
+}

@@ -1,0 +1,304 @@
+# Sushi Session
+
+Monorepo con pnpm workspaces. La carpeta actual es la raíz del proyecto y contiene
+un único repositorio Git y un único `pnpm-lock.yaml`.
+
+## Estado
+
+La app móvil está creada con Expo SDK 57, React Native 0.86.3, React 19.2.3,
+TypeScript estricto y Expo Router. La Fase 4 integra login email/password con
+Supabase Auth, restauración segura de sesión, rutas protegidas, cámara QR,
+check-in, contador sincronizado y un historial real consumiendo NestJS.
+
+La API en `apps/api` está creada con NestJS 12 y TypeScript estricto. Expone
+`GET /health` en el puerto 3001. `apps/dashboard` contiene el panel comercial Next.js.
+`packages/shared` conserva su manifiesto vacío. La API usa Prisma 7.10.0 para
+conectarse al PostgreSQL de desarrollo de Supabase con TLS verificado. Prisma está
+limitado al schema `public`. La primera migración del contrato v1.1 ya incorpora
+usuarios, restaurantes, sucursales, membresías y su selección de sucursales.
+La Fase 2 incorpora Supabase Auth: JWT verificados en NestJS, perfiles vinculados con
+el mismo UUID y `GET /me` protegido. Todavía no hay endpoints para crear o administrar
+restaurantes, sucursales o membresías.
+La Fase 3 agrega check-in QR idempotente, visitas y sesiones de conteo independientes,
+con control de versión y endpoints autenticados. La ventana de deduplicación del
+piloto es de 4 horas por usuario y sucursal. El conteo no verifica visitas ni otorga premios.
+
+La Fase 5 incorpora autorización comercial por membresía y sucursal, consulta de
+visitas y confirmación/rechazo desde un dashboard mínimo Next.js + TypeScript.
+`OWNER`, `ADMIN`, `MANAGER` y `STAFF` pueden resolver visitas; `ANALYST` sólo consulta.
+Se utilizan los modelos existentes: no hubo nuevas migraciones ni cambios en Auth,
+Storage, rewards, campañas o cupones.
+
+## Estructura
+
+```text
+apps/
+  mobile/
+    assets/              # Iconos originales de la plantilla
+    src/app/             # Login, Home, scanner, session/[id] e historial
+    src/auth/            # AuthProvider y renovación de sesión
+    src/core/            # Cliente HTTP, contratos, QR, contador y storage testeables
+    src/lib/             # Entorno público, Supabase y adaptadores Expo
+    src/sessions/        # Borradores en memoria, separados por usuario
+    src/components/      # Controles compartidos
+    test/                # Pruebas unitarias y cliente móvil contra API real
+    .env.example         # Solo URL de Supabase, publishable key y URL de API
+    .gitignore
+    app.json             # Expo, Router y referencia al proyecto EAS
+    package.json         # @sushi-session/mobile y sus dependencias
+    tsconfig.json        # TypeScript estricto y alias @/* -> src/*
+    LICENSE              # Licencia incluida en la plantilla oficial
+  api/
+    src/
+      main.ts            # Arranque del servidor (PORT o 3001)
+      app.module.ts      # Módulo raíz
+      health.controller.ts # GET /health
+      config/environment.ts # Carga y validación de variables de entorno
+      prisma/             # PrismaModule, PrismaService y comprobación SELECT 1
+      auth/               # AuthGuard, CurrentUser, AuthProfileService y GET /me
+      visits/             # CheckInService, SushiSessionService y sus endpoints
+      merchant/           # Autorización por alcance y revisión de visitas
+    prisma/schema.prisma  # Nueve modelos y doce enums (Fases 1 y 3), solo public
+    prisma/migrations/    # Historial Prisma con integridad SQL adicional
+    scripts/              # Migración y verificación limitadas a desarrollo
+    test/                 # Configuración, catálogo, integridad, Prisma y HTTP
+    prisma.config.ts
+    .env.example          # Plantilla de configuración sin secretos
+    certs/                # Certificado raíz público oficial de Supabase
+    nest-cli.json
+    tsconfig.json
+    tsconfig.build.json
+    .oxlintrc.json        # Lint con análisis de tipos
+    .prettierrc
+    package.json         # @sushi-session/api
+    README.md
+  dashboard/
+    src/app/             # Página y proxy restringido hacia NestJS
+    src/components/      # Login, listado, filtros y acciones comerciales
+    src/lib/             # Supabase Auth, cliente HTTP y proxy testeable
+    test/                # Pruebas del proxy y de sus límites
+    .env.example         # Dos valores públicos de Auth y API_URL del servidor
+    README.md            # Arranque, arquitectura y prueba manual
+packages/
+  shared/package.json
+package.json
+pnpm-workspace.yaml
+pnpm-lock.yaml
+```
+
+`.expo/`, `expo-env.d.ts` y `node_modules/` se generan localmente y están excluidos
+de Git. `work/` contiene archivos temporales de instalación y verificación, también
+excluidos. Los dos documentos Word originales permanecen en la raíz.
+
+## Arrancar desde PowerShell
+
+Herramientas verificadas: Node.js 24.17.0, pnpm 11.25.0 y Git 2.51.0.
+
+```powershell
+Set-Location -LiteralPath 'C:\Users\lichu\OneDrive\Documents\Personal Projects\Sushi Session'
+pnpm install --frozen-lockfile
+Copy-Item apps/mobile/.env.example apps/mobile/.env # Solo si todavía no existe
+# Completar las tres variables públicas en apps/mobile/.env.
+# Iniciar pnpm dev:api en otra terminal antes de usar la app.
+pnpm dev:mobile
+```
+
+Expo muestra las opciones de apertura y el QR en la terminal. Para probar en un
+celular con Expo Go, usar una versión compatible con SDK 57 y conectar el equipo y
+el celular a la misma red. En `EXPO_PUBLIC_API_URL`, usar la IP LAN del equipo, no
+`localhost`. El arranque en un dispositivo físico está pendiente. Ver la
+[guía móvil de Fase 4](apps/mobile/README.md) para configuración, QR y pruebas.
+
+Para abrir la versión web de esta misma app móvil:
+
+```powershell
+pnpm dev:mobile:web
+```
+
+La vista web sirve como preview de UI/login; su sesión se mantiene solo en memoria.
+La API actual no habilita CORS para el navegador: el flujo de negocio soportado en
+esta fase es nativo. El dashboard tendrá su propio proyecto en `apps/dashboard`.
+Detener el servidor con Ctrl+C.
+
+## Configuración de Expo y EAS
+
+- Nombre visible: `Sushi Session`.
+- Slug y esquema de enlaces: `sushi-session-dev`.
+- `extra.eas.projectId`: `5a2de9cd-01d4-41f4-ba6f-0327c40b45a9`.
+- Entrada de la app: `expo-router/entry`.
+- Rutas en `src/app`, con `typedRoutes: true`.
+- Plugins: `expo-router`, `expo-status-bar`, `expo-secure-store` y `expo-camera`
+  (QR y cámara, sin permiso de micrófono).
+- Metro usa el soporte integrado para monorepos de Expo.
+
+La vinculación local apunta al Project ID existente proporcionado por el usuario.
+El conector Expo pudo consultar sus builds (lista vacía). La CLI local de EAS no
+tiene sesión iniciada; no se ejecutaron builds ni se creó otro proyecto EAS.
+Para consultar la identidad remota desde la terminal cuando sea necesario:
+
+```powershell
+Set-Location -LiteralPath 'C:\Users\lichu\OneDrive\Documents\Personal Projects\Sushi Session\apps\mobile'
+npx eas-cli@latest login
+npx eas-cli@latest project:info
+```
+
+No hace falta iniciar sesión en EAS para probar la app localmente. La configuración
+de perfiles de build (`eas.json`) queda para la etapa de compilación.
+
+## Workspace y dependencias
+
+Los patrones `apps/*` y `packages/*` incluyen cuatro paquetes actuales: la raíz,
+`@sushi-session/mobile`, `@sushi-session/api` y `@sushi-session/shared`.
+Se conserva el modo aislado de pnpm.
+
+Se fijaron overrides en `pnpm-workspace.yaml` para `react-native-worklets` 0.10.1,
+`react-native-reanimated` 4.5.1 y `@react-native/metro-config` 0.86.3: pnpm había
+resuelto peers automáticos más nuevos e incompatibles con este SDK. Revisar esos
+valores al actualizar Expo/React Native.
+
+Instalar futuros módulos móviles desde la carpeta de la app usando `pnpm exec expo
+install <paquete>` para seleccionar versiones compatibles con el SDK.
+
+## Verificación
+
+Desde la raíz:
+
+```powershell
+pnpm typecheck:mobile
+pnpm test:mobile
+pnpm test:mobile:live # Opcional: entorno de desarrollo y usuario de prueba configurados
+pnpm peers check
+pnpm --filter @sushi-session/mobile exec expo install --check
+pnpm --filter @sushi-session/mobile exec expo export --platform all --output-dir ../../work/mobile-export
+pnpm workspace:list
+```
+
+En Fase 4 se verificaron TypeScript, compatibilidad de dependencias, empaquetado
+JavaScript/Hermes para Android e iOS y exportación web. Se verificó el render del
+login y su validación de campos vacíos en el navegador integrado. Las pruebas
+automatizadas cubren sincronización, conflictos, errores, refresh y storage.
+El cliente móvil se probó además contra Supabase Auth, NestJS y PostgreSQL reales:
+login, QR, check-in/reintento, sesión, conteo, 409, refresh, cierre e historiales.
+Esto no sustituye cámara, SecureStore y restauración en un celular ni constituye
+una compilación APK/IPA. El diagnóstico `expo-doctor` de la etapa inicial pasó
+21 comprobaciones; no se presenta como una nueva prueba de dispositivo.
+
+## Punto de revisión
+
+La etapa actual termina con la integración móvil de Fase 4 implementada y el
+cliente verificado contra `sushi-session-dev`. No se modificaron el modelo,
+migraciones ni la semántica PENDING/VERIFIED de Visit. No se implementaron rewards,
+campañas, cupones ni dashboard. La validación física en un teléfono queda pendiente.
+La arquitectura, los contratos HTTP y las pruebas están en [apps/api/README.md](apps/api/README.md).
+
+## API NestJS desde PowerShell
+
+Desde la raíz, iniciar el servidor con recarga automática:
+
+```powershell
+pnpm dev:api
+```
+
+En otra terminal, comprobar la respuesta HTTP 200 con JSON `{"status":"ok"}`:
+
+```powershell
+Invoke-RestMethod -Uri 'http://localhost:3001/health'
+```
+
+La API escucha en `0.0.0.0` para aceptar conexiones IPv4 de la red local. Para
+probar desde un iPhone conectado al mismo router, obtener la IPv4 de la PC con
+`ipconfig` y abrir `http://IP_LAN_DE_LA_PC:3001/health` en Safari mientras la API está
+encendida. Usar el puerto configurado en `PORT` si difiere de 3001. Ver los pasos y
+la resolución de problemas en [la guía LAN de la API](apps/api/README.md#acceso-desde-un-iphone-u-otro-dispositivo-de-la-lan).
+
+Para revisar el código y ejecutar la versión compilada:
+
+```powershell
+pnpm typecheck:api
+pnpm lint:api
+pnpm build:api
+pnpm start:api
+```
+
+Detener el servidor con Ctrl+C antes de iniciar otro en el mismo puerto.
+`start:api` necesita una compilación previa. La variable de entorno `PORT` permite
+cambiar el puerto predeterminado. La API carga `apps/api/.env`, excluido de Git.
+Usar `.env.example` como plantilla en nuevas instalaciones y completar la URL de
+PostgreSQL, `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` localmente. No sobrescribir
+el `.env` existente. NestJS usa claves públicas para verificar JWT: no requiere
+secret key ni service role de Supabase.
+
+Para comprobar Prisma y la conexión real, desde la raíz:
+
+```powershell
+pnpm prisma:validate
+pnpm prisma:generate
+pnpm test:api:config
+pnpm test:api:auth
+pnpm test:api:persistence
+pnpm test:api:visits
+pnpm db:check
+pnpm db:status
+```
+
+`db:check` ejecuta solo `SELECT 1` desde el contexto NestJS y cierra el pool.
+Prisma administra únicamente `public`; `auth` y `storage` permanecen bajo Supabase.
+Más detalles en `apps/api/README.md`.
+
+Las migraciones revisadas se aplican con `pnpm db:migrate:dev`. Este comando verifica
+que la conexión corresponda exclusivamente al proyecto de desarrollo; no usa `db push`.
+Las migraciones de Fase 1 y Fase 3 ya están aplicadas; volver a ejecutarlo no recrea las tablas.
+
+Para repetir la prueba de login real y `GET /me`, completar el archivo local
+`apps/api/.env.auth-test` (ignorado por Git) según su plantilla y ejecutar:
+
+```powershell
+pnpm test:api:auth:live
+pnpm test:api:visits:live
+```
+
+Este script solo trabaja con `sushi-session-dev`, conserva el perfil provisionado
+y cierra la sesión y el servidor de prueba. La API no carga las credenciales de ese
+archivo. La prueba de visitas crea un restaurante temporal y limpia solo sus códigos,
+visitas y sesiones al terminar. No se agregaron variables privadas ni secret keys a Expo.
+
+## Dashboard comercial (Fase 5)
+
+En dos terminales PowerShell, desde esta raíz:
+
+```powershell
+pnpm dev:api
+```
+
+```powershell
+pnpm dev:dashboard
+```
+
+Abrir `http://localhost:3000`. La configuración local ya está preparada en
+`apps/dashboard/.env.local`, excluido de Git. Para una nueva instalación, usar su
+`.env.example`; nunca copiar el `.env` completo de la API al dashboard.
+
+El login usa el mismo Supabase Auth. Para consultar o resolver visitas, la cuenta
+necesita una membresía comercial `ACTIVE` en un restaurante activo, con alcance
+válido a sucursales activas. Iniciar sesión no concede ese permiso. Las membresías
+temporales utilizadas en las pruebas se eliminan al finalizar; esta fase no incluye
+una pantalla para invitar miembros o administrar restaurantes.
+
+```powershell
+pnpm test:api:merchant
+pnpm test:dashboard
+pnpm typecheck:dashboard
+pnpm lint:dashboard
+pnpm build:dashboard
+```
+
+Ver [la guía del dashboard](apps/dashboard/README.md) y
+[el contrato comercial de la API](apps/api/README.md#fase-5-autorización-comercial-y-revisión-de-visitas).
+
+## Referencias
+
+- [pnpm workspaces](https://pnpm.io/workspaces)
+- [Expo: monorepos](https://docs.expo.dev/guides/monorepos/)
+- [Instalación de Expo Router](https://docs.expo.dev/router/installation/)
+- [Expo Router para SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/router/)
+- [NestJS: primeros pasos](https://docs.nestjs.com/first-steps)

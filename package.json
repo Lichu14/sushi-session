@@ -1,0 +1,41 @@
+{
+  "name": "sushi-session",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monorepo de Sushi Session",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "workspace:list": "pnpm list --recursive --depth -1",
+    "dev:mobile": "pnpm --filter @sushi-session/mobile start",
+    "dev:mobile:web": "pnpm --filter @sushi-session/mobile web",
+    "typecheck:mobile": "pnpm --filter @sushi-session/mobile typecheck",
+    "test:mobile": "pnpm --filter @sushi-session/mobile test",
+    "test:mobile:live": "pnpm --filter @sushi-session/mobile test:live",
+    "dev:dashboard": "pnpm --filter @sushi-session/dashboard dev",
+    "build:dashboard": "pnpm --filter @sushi-session/dashboard build",
+    "start:dashboard": "pnpm --filter @sushi-session/dashboard start",
+    "typecheck:dashboard": "pnpm --filter @sushi-session/dashboard typecheck",
+    "lint:dashboard": "pnpm --filter @sushi-session/dashboard lint",
+    "test:dashboard": "pnpm --filter @sushi-session/dashboard test",
+    "test:api:merchant": "pnpm --filter @sushi-session/api test:merchant",
+    "dev:api": "pnpm --filter @sushi-session/api start:dev",
+    "build:api": "pnpm --filter @sushi-session/api build",
+    "start:api": "pnpm --filter @sushi-session/api start:prod",
+    "typecheck:api": "pnpm --filter @sushi-session/api typecheck",
+    "lint:api": "pnpm --filter @sushi-session/api lint",
+    "prisma:generate": "pnpm --filter @sushi-session/api prisma:generate",
+    "prisma:validate": "pnpm --filter @sushi-session/api prisma:validate",
+    "db:check": "pnpm --filter @sushi-session/api db:check",
+    "test:api:config": "pnpm --filter @sushi-session/api test:config",
+    "test:api:auth": "pnpm --filter @sushi-session/api test:auth",
+    "test:api:auth:live": "pnpm --filter @sushi-session/api test:auth:live",
+    "test:api:visits": "pnpm --filter @sushi-session/api test:visits",
+    "test:api:visits:live": "pnpm --filter @sushi-session/api test:visits:live",
+    "test:api:persistence": "pnpm --filter @sushi-session/api test:persistence",
+    "db:migrate:dev": "pnpm --filter @sushi-session/api db:migrate:dev",
+    "db:status": "pnpm --filter @sushi-session/api db:status"
+  }
+}

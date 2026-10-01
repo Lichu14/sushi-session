@@ -1,0 +1,313 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["public"]
+}
+
+// Contract: Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx, phases 1 and 3.
+// Cross-schema Auth FK, CHECKs, deferred scope/evidence and lifecycle triggers live in migration SQL.
+// auth.users is owned by Supabase and must never be modeled here.
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+  DELETED
+
+  @@map("user_status")
+  @@schema("public")
+}
+
+enum RestaurantStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+
+  @@map("restaurant_status")
+  @@schema("public")
+}
+
+enum LocationStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+
+  @@map("location_status")
+  @@schema("public")
+}
+
+enum MerchantRole {
+  OWNER
+  ADMIN
+  MANAGER
+  STAFF
+  ANALYST
+
+  @@map("merchant_role")
+  @@schema("public")
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+
+  @@map("membership_status")
+  @@schema("public")
+}
+
+enum MembershipScopeType {
+  ALL_LOCATIONS
+  SELECTED_LOCATIONS
+
+  @@map("membership_scope_type")
+  @@schema("public")
+}
+
+model User {
+  // Supabase Auth supplies this UUID. No Prisma-generated default.
+  id                 String     @id @db.Uuid
+  displayName        String     @map("display_name") @db.VarChar(100)
+  avatarUrl          String?    @map("avatar_url") @db.Text
+  dateOfBirth        DateTime?  @map("date_of_birth") @db.Date
+  locale             String     @db.VarChar(10)
+  timeZone           String     @map("time_zone") @db.VarChar(50)
+  status             UserStatus
+  marketingConsentAt DateTime?  @map("marketing_consent_at") @db.Timestamptz(6)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  memberships        MerchantMembership[] @relation("MembershipUser")
+  invitedMemberships MerchantMembership[] @relation("MembershipInviter")
+  visits             Visit[]
+
+  @@map("users")
+  @@schema("public")
+}
+
+model Restaurant {
+  id         String           @id @default(uuid()) @db.Uuid
+  name       String           @db.VarChar(120)
+  slug       String           @unique @db.VarChar(120)
+  legalName  String?          @map("legal_name") @db.VarChar(160)
+  taxId      String?          @map("tax_id") @db.VarChar(40)
+  websiteUrl String?          @map("website_url") @db.Text
+  status     RestaurantStatus
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  locations   RestaurantLocation[]
+  memberships MerchantMembership[]
+
+  @@map("restaurants")
+  @@schema("public")
+}
+
+model RestaurantLocation {
+  id           String         @id @default(uuid()) @db.Uuid
+  restaurantId String         @map("restaurant_id") @db.Uuid
+  name         String         @db.VarChar(120)
+  slug         String         @db.VarChar(120)
+  addressLine1 String         @map("address_line_1") @db.VarChar(160)
+  addressLine2 String?        @map("address_line_2") @db.VarChar(160)
+  city         String         @db.VarChar(100)
+  region       String         @db.VarChar(100)
+  postalCode   String?        @map("postal_code") @db.VarChar(20)
+  countryCode  String         @map("country_code") @db.Char(2)
+  latitude     Decimal?       @db.Decimal(9, 6)
+  longitude    Decimal?       @db.Decimal(9, 6)
+  timeZone     String         @map("time_zone") @db.VarChar(50)
+  phone        String?        @db.VarChar(30)
+  status       LocationStatus
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  restaurant          Restaurant                   @relation(fields: [restaurantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  membershipLocations MerchantMembershipLocation[]
+  checkInCodes        CheckInCode[]
+  visits              Visit[]
+
+  @@unique([restaurantId, slug])
+  @@map("restaurant_locations")
+  @@schema("public")
+}
+
+model MerchantMembership {
+  id              String              @id @default(uuid()) @db.Uuid
+  userId          String              @map("user_id") @db.Uuid
+  restaurantId    String              @map("restaurant_id") @db.Uuid
+  role            MerchantRole
+  status          MembershipStatus
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  scopeType       MembershipScopeType @map("scope_type")
+  invitedByUserId String?             @map("invited_by_user_id") @db.Uuid
+  invitedAt       DateTime            @map("invited_at") @db.Timestamptz(6)
+  acceptedAt      DateTime?           @map("accepted_at") @db.Timestamptz(6)
+
+  user                User                         @relation("MembershipUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  restaurant          Restaurant                   @relation(fields: [restaurantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  invitedBy           User?                        @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  locations           MerchantMembershipLocation[]
+  createdCheckInCodes CheckInCode[]
+
+  @@unique([userId, restaurantId])
+  @@index([restaurantId, status])
+  @@map("merchant_memberships")
+  @@schema("public")
+}
+
+model MerchantMembershipLocation {
+  membershipId String @map("membership_id") @db.Uuid
+  locationId   String @map("location_id") @db.Uuid
+
+  membership MerchantMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  location   RestaurantLocation @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([membershipId, locationId])
+  @@index([locationId, membershipId])
+  @@map("merchant_membership_locations")
+  @@schema("public")
+}
+
+enum CheckInCodeMode {
+  STATIC
+  ROTATING
+  ONE_TIME
+
+  @@map("check_in_code_mode")
+  @@schema("public")
+}
+
+enum CheckInCodeStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+
+  @@map("check_in_code_status")
+  @@schema("public")
+}
+
+enum VisitSource {
+  QR
+  MANUAL
+  IMPORT
+
+  @@map("visit_source")
+  @@schema("public")
+}
+
+enum VisitStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  CANCELLED
+
+  @@map("visit_status")
+  @@schema("public")
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+
+  @@map("session_status")
+  @@schema("public")
+}
+
+enum SessionEntryMode {
+  TAP
+  MANUAL
+
+  @@map("session_entry_mode")
+  @@schema("public")
+}
+
+model CheckInCode {
+  id                    String            @id @default(uuid()) @db.Uuid
+  locationId            String            @map("location_id") @db.Uuid
+  label                 String?           @db.VarChar(80)
+  tokenHash             String            @unique @map("token_hash") @db.Char(64)
+  mode                  CheckInCodeMode
+  validFrom             DateTime          @map("valid_from") @db.Timestamptz(6)
+  validUntil            DateTime?         @map("valid_until") @db.Timestamptz(6)
+  maxUses               Int?              @map("max_uses")
+  status                CheckInCodeStatus
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  revokedAt             DateTime?         @map("revoked_at") @db.Timestamptz(6)
+  createdByMembershipId String?           @map("created_by_membership_id") @db.Uuid
+
+  location  RestaurantLocation     @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy MerchantMembership?    @relation(fields: [createdByMembershipId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  evidence  VisitCheckInEvidence[]
+
+  @@index([locationId, status])
+  @@map("check_in_codes")
+  @@schema("public")
+}
+
+model Visit {
+  id             String      @id @default(uuid()) @db.Uuid
+  userId         String      @map("user_id") @db.Uuid
+  locationId     String      @map("location_id") @db.Uuid
+  source         VisitSource
+  status         VisitStatus
+  checkedInAt    DateTime    @map("checked_in_at") @db.Timestamptz(6)
+  checkedOutAt   DateTime?   @map("checked_out_at") @db.Timestamptz(6)
+  verifiedAt     DateTime?   @map("verified_at") @db.Timestamptz(6)
+  rejectedReason String?     @map("rejected_reason") @db.VarChar(300)
+  idempotencyKey String      @unique @map("idempotency_key") @db.VarChar(120)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  location RestaurantLocation    @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  evidence VisitCheckInEvidence?
+  session  SushiSession?
+
+  @@index([userId, checkedInAt(sort: Desc)])
+  @@index([locationId, checkedInAt(sort: Desc)])
+  @@map("visits")
+  @@schema("public")
+}
+
+model VisitCheckInEvidence {
+  visitId       String   @id @map("visit_id") @db.Uuid
+  checkInCodeId String   @map("check_in_code_id") @db.Uuid
+  validatedAt   DateTime @map("validated_at") @db.Timestamptz(6)
+
+  visit Visit       @relation(fields: [visitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  code  CheckInCode @relation(fields: [checkInCodeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([checkInCodeId])
+  @@map("visit_check_in_evidence")
+  @@schema("public")
+}
+
+model SushiSession {
+  id         String           @id @default(uuid()) @db.Uuid
+  visitId    String           @unique @map("visit_id") @db.Uuid
+  status     SessionStatus
+  startedAt  DateTime         @map("started_at") @db.Timestamptz(6)
+  endedAt    DateTime?        @map("ended_at") @db.Timestamptz(6)
+  pieceCount Int              @map("piece_count")
+  entryMode  SessionEntryMode @map("entry_mode")
+  notes      String?          @db.VarChar(500)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  version    Int              @default(1)
+
+  visit Visit @relation(fields: [visitId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("sushi_sessions")
+  @@schema("public")
+}
