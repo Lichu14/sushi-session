@@ -295,6 +295,55 @@ pnpm build:dashboard
 Ver [la guía del dashboard](apps/dashboard/README.md) y
 [el contrato comercial de la API](apps/api/README.md#fase-5-autorización-comercial-y-revisión-de-visitas).
 
+## QR de desarrollo para probar el flujo completo
+
+Desde esta raíz, con Node.js 24 y las dependencias instaladas:
+
+```powershell
+pnpm dev:qr
+```
+
+Genera `work/dev-checkin-qr.png` para **Sushi Session Test → Local de prueba**.
+Cada ejecución revoca los códigos anteriores `DEV_TEST_QR` de esa sucursal, crea
+uno nuevo y reemplaza el PNG. El token sólo se conserva en el QR local; PostgreSQL
+guarda su SHA-256. `work/` está ignorado por Git y la herramienta comprueba esa exclusión.
+El comando sólo funciona contra `sushi-session-dev` y no crea migraciones.
+
+Para habilitar también el dashboard, elegir explícitamente un UUID existente de
+`public.users` (el mismo UUID de Supabase Auth):
+
+```powershell
+pnpm dev:qr --owner-user-id '<UUID_DE_PUBLIC_USERS>'
+```
+
+Esa opción asigna OWNER + ACTIVE + ALL_LOCATIONS **sólo al restaurante de prueba**.
+Sin la opción no se asignan ni cambian membresías; una asignación anterior permanece.
+
+Abrir el PNG en la PC con `Invoke-Item .\work\dev-checkin-qr.png`, iniciar API/mobile/
+dashboard y escanear desde **Escanear QR de la sucursal** en la app del iPhone.
+El flujo es: **QR → Visit PENDING → Sushi Session → dashboard → Confirmar → VERIFIED**.
+El conteo o completar SushiSession no verifican la visita. La ventana de cuatro horas
+sigue vigente: regenerar el QR no habilita otra visita del mismo usuario a esa sucursal.
+
+Más detalles y pruebas: [guía dev:qr de la API](apps/api/README.md#herramienta-devqr).
+
+## Confirmación de cierre y check-in reciente
+
+El móvil muestra **Sesión terminada** y el total de piezas sólo cuando NestJS
+confirma `COMPLETED`, también al recuperar una respuesta perdida. El resultado
+es de sólo lectura y ofrece historial/inicio.
+
+El bloqueo de cuatro horas tiene el código `CHECK_IN_COOLDOWN`. El scanner
+explica la espera y consulta la sesión de esa visita para ofrecer **Continuar
+conteo** o **Ver resultado**; si todavía no tiene sesión, permite recuperarla.
+La ventana permanece anclada a `Visit.checkedInAt`, por usuario y sucursal,
+independientemente de la finalización. No cambian la verificación de visitas,
+la idempotencia, el modelo de datos ni las recompensas; no hay descuentos.
+
+Pruebas: `pnpm test:mobile`, `pnpm test:api:visits` y, con la configuración de
+desarrollo existente, `pnpm test:mobile:live`. Detalles y prueba manual en
+[la guía móvil](apps/mobile/README.md#sincronización-del-contador).
+
 ## Referencias
 
 - [pnpm workspaces](https://pnpm.io/workspaces)

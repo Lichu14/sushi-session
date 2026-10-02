@@ -492,6 +492,14 @@ visitas de cualquier estado/origen; otra sucursal tiene su propia ventana. Se us
 tiempo transcurrido en UTC, no cambio de día calendario. El valor está en
 `CHECK_IN_WINDOW_MS`; v1.1 exigía una ventana, pero no fijaba su duración.
 
+Este bloqueo devuelve `{ statusCode: 409, code: "CHECK_IN_COOLDOWN", message,
+visitId }`. El UUID corresponde únicamente a una visita del usuario autenticado
+en esa sucursal. Permite al móvil consultar la sesión asociada sin confundirla
+con otra visita ni inferir que el conteo siga abierto. No se incluyen tokens,
+hashes ni datos de otros usuarios. Los demás conflictos 409 no llevan este código.
+Finalizar una SushiSession no elimina ni reinicia la ventana: se sigue contando
+desde `Visit.checkedInAt`, nunca desde `SushiSession.endedAt`.
+
 Los códigos deben estar activos, vigentes y pertenecer a una sucursal/restaurante
 activos. Todas las visitas creadas por esta API son QR/PENDING, también para códigos
 ROTATING y ONE_TIME: todavía no hay proceso autorizado de verificación. El servicio
@@ -676,6 +684,91 @@ Verificación de Fase 5: 162 pruebas de API aprobadas (140 existentes + 22 comer
 Prisma validate/generate, TypeScript, lint y build correctos. El historial de
 migraciones permanece al día. El flujo del dashboard también se comprobó con
 Supabase Auth real y PostgreSQL, sin dejar membresías ni restaurantes de prueba.
+
+## Herramienta dev:qr
+
+Herramienta local de desarrollo; no registra endpoints ni modifica el modelo o las
+migraciones. Requiere Node.js 24 (el runtime comprobado del monorepo) y dependencias
+de desarrollo instaladas. Ejecutar desde la raíz:
+
+```powershell
+pnpm dev:qr
+pnpm dev:qr --owner-user-id '<UUID_DE_PUBLIC_USERS>'
+```
+
+La segunda variante es opcional: el UUID debe identificar un User existente, ACTIVE
+y no eliminado. No se elige un usuario automáticamente, no se crean identidades y
+no se escribe en Supabase Auth. La opción crea o actualiza **sólo** su membresía en
+el restaurante de prueba como OWNER + ACTIVE + ALL_LOCATIONS; establece acceptedAt
+si faltaba y elimina selecciones previas de esa membresía en la misma transacción.
+Omitir el argumento conserva las membresías existentes. No hay variables privadas nuevas.
+
+`scripts/dev-qr.mjs` compila Prisma/Nest localmente con salida capturada, carga la
+configuración habitual y usa el mismo PrismaService/TLS. Antes de conectar verifica
+el proyecto fijo `sushi-session-dev`, puerto PostgreSQL 5432, base postgres, schema
+public y SUPABASE_URL del mismo proyecto. Rechaza NODE_ENV ajeno a development/test.
+No abre un servidor ni aplica migraciones. Sus errores son genéricos y no imprimen
+excepciones de PostgreSQL, credenciales, tokens o hashes.
+
+`scripts/dev-qr-fixture.mjs` reserva los slugs `dev-sushi-session-test` y
+`dev-local-de-prueba`, con nombres **Sushi Session Test** y **Local de prueba**.
+La dirección es ficticia. Reutiliza sólo esos registros si sus nombres coinciden y
+están activos; ante colisión o estado inactivo aborta sin reconvertir otros datos.
+
+Cada ejecución genera 32 bytes aleatorios (256 bits), los representa en base64url
+y guarda únicamente SHA-256 en `CheckInCode.tokenHash`. Revoca los códigos anteriores
+de esa sucursal con label exacto `DEV_TEST_QR`, fijando revokedAt. No afecta códigos
+con otro label o de otras sucursales. Inserta un código nuevo STATIC + ACTIVE con
+validFrom del reloj de PostgreSQL, validUntil=null y maxUses=null, permitido por las
+restricciones actuales. Las visitas, evidencia y sesiones anteriores se conservan.
+
+El PNG de 768 px contiene exclusivamente JSON con `v: 1`, `locationId` real y `token`.
+Se genera con [node-qrcode](https://github.com/soldair/node-qrcode), se decodifica con
+[jsQR](https://github.com/cozmo/jsQR) y se valida usando `parseCheckInQr` de mobile
+antes de confirmar la transacción. Las tres bibliotecas de imagen son dependencias
+de desarrollo. No se produce un archivo de texto con el token.
+
+Un bloqueo transaccional PostgreSQL serializa rotaciones. Un lock local evita que dos
+procesos de esta carpeta publiquen PNGs fuera de orden. Se escribe/sincroniza un PNG
+temporal antes del commit y se renombra a `work/dev-checkin-qr.png` después. Un fallo
+previo al commit revierte cambios; si falla la publicación tras el commit, se intenta
+revocar el código nuevo y se devuelve error. Base de datos y filesystem no comparten
+una transacción: después de una interrupción brusca, volver a ejecutar para generar
+un QR vigente. Si quedó `work/.dev-checkin-qr.lock`, comprobar que no haya otro
+`dev:qr` ejecutándose antes de eliminar únicamente ese lock local.
+
+`work/` y todos sus PNGs quedan ignorados. El comando aborta si falta esa exclusión
+o si ya hay archivos de work versionados. La salida correcta contiene sólo seis
+datos: pngPath, restaurant, location, restaurantId, locationId y checkInCodeId.
+Al regenerarlo, las copias o capturas anteriores del QR dejan de servir.
+
+### Prueba manual
+
+1. Iniciar `pnpm dev:api`, `pnpm dev:mobile` y `pnpm dev:dashboard` en terminales separadas.
+2. Generar el QR, opcionalmente con el UUID explícito del usuario comercial.
+3. Abrirlo en la PC: `Invoke-Item .\work\dev-checkin-qr.png`.
+4. En el iPhone, entrar a Sushi Session y usar su scanner de sucursal. API y teléfono
+   deben ser accesibles por LAN según la configuración móvil existente.
+5. Registrar el check-in: la Visit queda PENDING. Iniciar SushiSession, contar y completar.
+6. En `http://localhost:3000`, entrar con la cuenta asociada y elegir **Local de prueba**
+   del restaurante **Sushi Session Test**. Confirmar la visita y verla en Verificadas.
+
+La herramienta no crea visitas para mostrar en el dashboard: la primera se crea
+cuando escaneás desde la app. La ventana de deduplicación de cuatro horas sigue
+vigente aunque se regenere el código; no se borran visitas ni se altera ese control.
+
+### Pruebas automatizadas
+
+```powershell
+pnpm test:api:dev-qr
+```
+
+La suite usa registros aislados y elimina sólo esos fixtures. Comprueba la restricción
+de proyecto, argumentos, PNG decodificable con el parser móvil, hash persistido,
+rotación concurrente, aislamiento de labels/sucursales, OWNER explícito, rollback
+ante fallo de escritura y colisión de slugs. Recorre además por HTTP el PNG → check-in
+PENDING → SushiSession/conteo/cierre → confirmación comercial VERIFIED, preservando
+evidencia e historial al revocar el QR. No consume la visita del fixture manual.
 
 ## Referencias
 

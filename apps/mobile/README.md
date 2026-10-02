@@ -86,6 +86,26 @@ para reintentos posteriores. Volver a Home → “Abrir sesión de la última vi
 permite recuperar una visita ya aceptada. El backend mantiene su deduplicación
 de cuatro horas; un conflicto no convierte la visita en VERIFIED.
 
+El bloqueo por visita reciente usa exclusivamente HTTP 409 con
+`code: CHECK_IN_COOLDOWN` y el `visitId` propio devuelto por NestJS. Otros 409
+conservan su manejo de conflicto y no se presentan como un bloqueo temporal.
+El scanner muestra:
+
+> Ya registraste una visita a esta sucursal. Para registrar otra deben pasar cuatro horas desde tu último check-in. Esto no significa que tu conteo siga abierto.
+
+Consulta `/me/sessions` con paginación hasta encontrar **esa visita**, sin asumir
+que sea la última visita general: ACTIVE ofrece **Continuar conteo**, COMPLETED
+ofrece **Ver resultado**, y CANCELLED permite consultar la sesión cancelada.
+Si el historial confirma que todavía no existe una sesión, ofrece iniciar el
+conteo de esa misma visita. Si falla la consulta, permite reintentar la lectura;
+no interpreta el error como ausencia de sesión ni vuelve a enviar el check-in.
+Una cámara pausada sin operación pendiente muestra texto estático, sin spinner.
+Los errores de red del check-in conservan el reintento con la misma clave.
+
+La ventana sigue siendo **cuatro horas desde Visit.checkedInAt**, por usuario y
+sucursal. No depende de SushiSession.endedAt: finalizar, reintentar o regenerar
+el QR no la reinician ni la eliminan.
+
 ## Auth, API y navegación
 
 - `AuthProvider` restaura con `getSession`, observa cambios de Auth, ofrece login
@@ -130,7 +150,13 @@ resultado incierto conserva el borrador y exige releer antes de otra escritura.
 Finalizar bloquea taps/doble envío, espera el PATCH pendiente, guarda el último
 conteo y recién entonces llama a `/complete` con la versión actual. Si se pierde
 su respuesta, relee para distinguir una sesión ya completada de una pendiente.
-Una sesión cerrada muestra resultado inmutable y acceso al historial.
+Sólo al recibir `COMPLETED` del servidor (en `/complete` o en una relectura)
+aparece **Sesión terminada**, con la cantidad final confirmada y accesos a
+**Ver historial** / **Volver a Inicio**. El resultado permanece de sólo lectura.
+Si fallan tanto el cierre como la relectura, se conserva la recuperación y no se
+muestra éxito. Volver a una sesión relee su estado incluso si hay un borrador:
+un cierre remoto recupera el total del servidor; una diferencia en una sesión
+activa conserva la elección explícita entre conteo local y remoto.
 
 Los borradores sobreviven a la navegación dentro del mismo login. En segundo
 plano se intenta sincronizar, pero el sistema operativo puede suspender la app:
@@ -166,6 +192,9 @@ Las pruebas unitarias usan el soporte TypeScript de Node (usar Node 24 o Node
 22.18+). Cubren QR, debounce, límites, taps durante PATCH, control de versión,
 relectura tras errores, respuesta perdida de finalización, Bearer/refresh,
 paginación, recuperación de inicio y fragmentación/restauración del almacenamiento.
+También cubren cierre pendiente, guardado fallido, respuesta de cierre perdida
+con relectura fallida y posterior recuperación, sesión remota completada con
+borrador local, recuperación ACTIVE/COMPLETED/sin sesión y distinción de otros 409.
 El adaptador de storage se prueba en memoria; esto no simula el llavero nativo.
 
 Prueba optativa contra el backend y Auth reales:
@@ -198,6 +227,11 @@ PENDING y verifiedAt vacío. No se hizo un build APK/IPA ni una prueba de teléf
 5. Cortar la red durante un guardado, recuperarla y resolver la relectura.
 6. Alterar la versión desde otro cliente de prueba; verificar el conflicto 409.
 7. Finalizar con taps recién hechos; ver resultado e historial con el total exacto.
+   Confirmar “Sesión terminada” y ausencia de controles de edición. Escanear otra
+   vez el mismo QR dentro de cuatro horas: mensaje de bloqueo y “Ver resultado”,
+   sin spinner ni reintento de check-in. Repetir con una sesión ACTIVE y comprobar
+   “Continuar conteo”. Cortar la red al finalizar: nunca mostrar éxito sin releer
+   y confirmar COMPLETED.
 8. Pasar a segundo plano y volver; comprobar renovación/continuidad del login.
 9. Cerrar sesión; reabrir y confirmar que las rutas privadas no son accesibles.
 

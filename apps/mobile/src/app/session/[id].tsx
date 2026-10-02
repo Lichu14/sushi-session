@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
-import { Text } from 'react-native';
+import { Text, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Counter } from '@/core/counter';
 import { errorMessage } from '@/core/api-client';
@@ -21,6 +21,57 @@ function SessionCounter({ counter }: { counter: Counter }) {
   const active = state.session.status === 'ACTIVE';
   const blocked =
     state.finishing || state.needsReload || state.conflict || !active;
+  if (state.session.status === 'COMPLETED') {
+    return (
+      <Screen>
+        <View
+          style={{
+            backgroundColor: '#e7f5ed',
+            borderRadius: 16,
+            padding: 24,
+            gap: 16,
+          }}
+        >
+          <Text
+            accessibilityRole="header"
+            accessibilityLiveRegion="polite"
+            style={{
+              fontSize: 30,
+              fontWeight: '700',
+              color: '#185c37',
+              textAlign: 'center',
+            }}
+          >
+            Sesión terminada
+          </Text>
+          <Text
+            selectable
+            style={{
+              fontSize: 64,
+              fontWeight: '700',
+              textAlign: 'center',
+              color: '#185c37',
+            }}
+          >
+            {state.session.pieceCount}
+          </Text>
+          <Message>Piezas contadas · Resultado final</Message>
+        </View>
+        <Message>
+          Tu conteo quedó guardado. Esta sesión es de sólo lectura.
+        </Message>
+        <Action
+          title="Ver historial"
+          onPress={() => router.replace('/history')}
+        />
+        <Action
+          title="Volver a Inicio"
+          secondary
+          onPress={() => router.replace('/')}
+        />
+      </Screen>
+    );
+  }
   return (
     <Screen>
       <Message>
@@ -110,8 +161,8 @@ function SessionCounter({ counter }: { counter: Counter }) {
       />
       {active ? (
         <Message>
-          Podés volver desde el historial. Esperá a ver “Conteo guardado” antes
-          de cerrar la app.
+          Podés volver desde el historial. Esperá a ver “Conteo guardado”
+          antes de cerrar la app.
         </Message>
       ) : null}
     </Screen>
@@ -132,12 +183,12 @@ export default function SessionScreen() {
       if (current === generation.current) setCounter(existing ?? null);
       if (existing) {
         if (
-          !existing.dirty &&
           !existing.getSnapshot().syncing &&
           !existing.getSnapshot().finishing
         ) {
+          const hadDraft = existing.dirty;
           await existing.reload();
-          existing.resolveConflict(false);
+          if (!hadDraft) existing.resolveConflict(false);
         }
       } else {
         const session = await store.api.findSession(id);

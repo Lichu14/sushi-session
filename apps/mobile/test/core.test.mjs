@@ -6,6 +6,7 @@ import { createSushiApi } from '../src/core/sushi-api.ts';
 import { parseCheckInQr } from '../src/core/qr.ts';
 import { Counter } from '../src/core/counter.ts';
 import { createChunkedStorage } from '../src/core/secure-storage.ts';
+import { recentVisitAction } from '../src/core/check-in-recovery.ts';
 
 const initial = () => ({
   id: randomUUID(),
@@ -190,6 +191,90 @@ test('lost completion response reconciles completed state through history', asyn
   assert.equal(counter.getSnapshot().count, 5);
   assert.equal(f.completions.length, 1);
 });
+test('completion remains unconfirmed while the server reply is pending', async (t) => {
+  const f = fixture(),
+    original = f.api.completeSession;
+  let release;
+  f.api.completeSession = async (...args) => {
+    await new Promise((resolve) => {
+      release = resolve;
+    });
+    return original(...args);
+  };
+  const counter = new Counter(f.api, f.remote);
+  t.after(() => counter.dispose());
+  const finishing = counter.finish();
+  assert.equal(counter.getSnapshot().finishing, true);
+  assert.equal(counter.getSnapshot().session.status, 'ACTIVE');
+  counter.tap(5);
+  assert.equal(counter.getSnapshot().count, 0);
+  release();
+  await finishing;
+  assert.equal(counter.getSnapshot().session.status, 'COMPLETED');
+  assert.equal(counter.getSnapshot().session.pieceCount, 0);
+});
+test('lost completion and failed reread show no success until a later confirmed reread', async (t) => {
+  const f = fixture(),
+    complete = f.api.completeSession,
+    read = f.api.findSession;
+  f.api.completeSession = async (...args) => {
+    await complete(...args);
+    throw new ApiError(0, 'Lost response');
+  };
+  f.api.findSession = async () => {
+    throw new ApiError(0, 'Offline');
+  };
+  const counter = new Counter(f.api, f.remote);
+  t.after(() => counter.dispose());
+  counter.tap(9);
+  await assert.rejects(counter.finish());
+  assert.equal(f.remote.status, 'COMPLETED');
+  assert.equal(counter.getSnapshot().session.status, 'ACTIVE');
+  assert.equal(counter.getSnapshot().needsReload, true);
+  assert.equal(counter.getSnapshot().count, 9);
+  await assert.rejects(counter.finish());
+  assert.equal(f.completions.length, 1);
+  f.api.findSession = read;
+  await counter.reload();
+  assert.equal(counter.getSnapshot().session.status, 'COMPLETED');
+  assert.equal(counter.getSnapshot().session.pieceCount, 9);
+  assert.equal(counter.getSnapshot().error, null);
+  counter.tap(1);
+  await counter.finish();
+  assert.equal(counter.getSnapshot().count, 9);
+  assert.equal(f.completions.length, 1);
+});
+test('failed final save retains draft and never completes the session', async (t) => {
+  const f = fixture();
+  f.api.updateSession = async () => {
+    throw new ApiError(0, 'Offline');
+  };
+  const counter = new Counter(f.api, f.remote);
+  t.after(() => counter.dispose());
+  counter.tap(3);
+  await assert.rejects(counter.finish());
+  assert.equal(counter.getSnapshot().session.status, 'ACTIVE');
+  assert.equal(counter.getSnapshot().count, 3);
+  assert.equal(counter.getSnapshot().conflict, true);
+  assert.equal(f.completions.length, 0);
+});
+test('rereading a remotely completed session replaces a stale local draft with the confirmed result', async (t) => {
+  const f = fixture(),
+    counter = new Counter(f.api, f.remote);
+  t.after(() => counter.dispose());
+  counter.tap(3);
+  f.change({
+    status: 'COMPLETED',
+    pieceCount: 12,
+    version: 3,
+    endedAt: new Date().toISOString(),
+  });
+  await counter.reload();
+  assert.equal(counter.getSnapshot().count, 12);
+  assert.equal(counter.getSnapshot().session.status, 'COMPLETED');
+  assert.equal(counter.getSnapshot().conflict, false);
+  assert.equal(f.updates.length, 0);
+});
 test('closed or disposed counters cannot produce new writes', async () => {
   const f = fixture(),
     counter = new Counter(f.api, { ...f.remote, status: 'COMPLETED' });
@@ -284,6 +369,102 @@ test('session lookup scans all history pages; duplicate start recovers by visitI
   assert.equal((await api.findSession(target.id)).id, target.id);
   assert.equal((await api.startSession(target.visitId)).id, target.id);
   assert.equal(paths.length, 5);
+});
+test('recent visit recovery reads the exact visit across pages, without writes', async () => {
+  for (const [status, action] of [
+    ['ACTIVE', 'Continuar conteo'],
+    ['COMPLETED', 'Ver resultado'],
+    ['CANCELLED', 'Ver sesión cancelada'],
+  ]) {
+    const target = { ...initial(), status },
+      paths = [];
+    const api = createSushiApi(async (path, method = 'GET') => {
+      assert.equal(method, 'GET');
+      paths.push(path);
+      return path.includes('cursor=')
+        ? { items: [target], nextCursor: null }
+        : { items: [initial()], nextCursor: 'older' };
+    });
+    const recovered = await api.findVisitSession(target.visitId);
+    assert.equal(recovered.id, target.id);
+    assert.equal(recentVisitAction(recovered), action);
+    assert.equal(paths.length, 2);
+  }
+});
+test('recent visit with no session allows start; a failed history read never means no session', async () => {
+  const target = initial(),
+    writes = [];
+  const api = createSushiApi(async (path, method = 'GET') => {
+    if (method === 'POST') {
+      writes.push(path);
+      return target;
+    }
+    return { items: [initial()], nextCursor: null };
+  });
+  const recovered = await api.findVisitSession(target.visitId);
+  assert.equal(recovered, null);
+  assert.equal(recentVisitAction(recovered), 'Iniciar conteo de esta visita');
+  assert.equal(writes.length, 0);
+  assert.equal((await api.startSession(target.visitId)).id, target.id);
+  assert.deepEqual(writes, [`/visits/${target.visitId}/session`]);
+  for (const status of [0, 404, 409, 503]) {
+    const failed = createSushiApi(async () => {
+      throw new ApiError(status, 'Unavailable');
+    });
+    await assert.rejects(
+      failed.findVisitSession(target.visitId),
+      (e) => e.status === status,
+    );
+  }
+});
+test('only the stable check-in cooldown code with a valid visit ID enables recent-visit recovery', async () => {
+  const visitId = randomUUID();
+  const auth = {
+    getSession: async () => ({
+      data: { session: { access_token: 'private', user: { id: 'u' } } },
+      error: null,
+    }),
+    refreshSession: async () => {
+      throw Error();
+    },
+  };
+  const cooldown = {
+    code: 'CHECK_IN_COOLDOWN',
+    visitId,
+    message: 'private-response',
+  };
+  for (const [data, status, path, expected] of [
+    [cooldown, 409, '/check-ins', visitId],
+    [{ ...cooldown, code: 'OTHER_CONFLICT' }, 409, '/check-ins', undefined],
+    [{ message: 'private-response' }, 409, '/check-ins', undefined],
+    [{ ...cooldown, visitId: 'invalid' }, 409, '/check-ins', undefined],
+    [null, 409, '/check-ins', undefined],
+    [cooldown, 400, '/check-ins', undefined],
+    [cooldown, 409, '/sessions/example/complete', undefined],
+  ]) {
+    const request = createApiClient('https://api.test', auth, async () =>
+      Response.json(data, { status }),
+    );
+    await assert.rejects(
+      request(path, 'POST', {}),
+      (e) =>
+        e.status === status &&
+        e.cooldownVisitId === expected &&
+        !e.message.includes('private'),
+    );
+  }
+  const invalidJson = createApiClient(
+    'https://api.test',
+    auth,
+    async () => new Response('private-response', { status: 409 }),
+  );
+  await assert.rejects(
+    invalidJson('/check-ins', 'POST', {}),
+    (e) =>
+      e.status === 409 &&
+      e.cooldownVisitId === undefined &&
+      !e.message.includes('private'),
+  );
 });
 test('secure storage chunks large Unicode sessions, restores and removes all current chunks', async () => {
   const values = new Map();

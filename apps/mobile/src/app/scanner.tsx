@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { AppState, Linking, View } from 'react-native';
+import { AppState, Linking, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { randomUUID } from 'expo-crypto';
 import { router, useFocusEffect } from 'expo-router';
@@ -13,15 +13,27 @@ import {
 } from '@/components/ui';
 import { ApiError, errorMessage } from '@/core/api-client';
 import { parseCheckInQr } from '@/core/qr';
-import type { CheckInInput } from '@/core/types';
+import {
+  CHECK_IN_COOLDOWN_MESSAGE,
+  recentVisitAction,
+} from '@/core/check-in-recovery';
+import type { CheckInInput, SushiSession } from '@/core/types';
 export default function Scanner() {
   const store = useSessions();
-  const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] =
+    useCameraPermissions();
   const [focused, setFocused] = useState(false),
-    [foreground, setForeground] = useState(AppState.currentState === 'active');
+    [foreground, setForeground] = useState(
+      AppState.currentState === 'active',
+    );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const [cooldown, setCooldown] = useState<string | null>(null);
+  // undefined means not yet confirmed; null means history confirmed no session.
+  const [recentSession, setRecentSession] = useState<
+    SushiSession | null | undefined
+  >();
   const locked = useRef(false),
     mounted = useRef(false),
     input = useRef<CheckInInput | null>(null),
@@ -42,6 +54,26 @@ export default function Scanner() {
       };
     }, [getPermission]),
   );
+  async function readRecentSession(id: string) {
+    try {
+      const session = await store.api.findVisitSession(id);
+      if (mounted.current) setRecentSession(session);
+    } catch (e) {
+      if (mounted.current) setError(errorMessage(e));
+    }
+  }
+  async function retrySessionLookup() {
+    if (locked.current || !cooldown) return;
+    locked.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await readRecentSession(cooldown);
+    } finally {
+      locked.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
   async function submit() {
     if (locked.current || (!input.current && !visitId.current)) return;
     locked.current = true;
@@ -58,14 +90,28 @@ export default function Scanner() {
       const session = await store.api.startSession(visitId.current);
       if (!mounted.current) return;
       store.accept(session);
-      router.replace({ pathname: '/session/[id]', params: { id: session.id } });
+      router.replace({
+        pathname: '/session/[id]',
+        params: { id: session.id },
+      });
     } catch (e) {
-      if (mounted.current)
-        setError(
-          e instanceof ApiError && e.status === 409 && !visitId.current
-            ? 'Ya hay una visita reciente o la solicitud entra en conflicto. Abrí la última visita desde Inicio.'
-            : errorMessage(e),
-        );
+      if (!mounted.current) return;
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        e.cooldownVisitId &&
+        !visitId.current
+      ) {
+        // The API returns only this user's recent visit at the scanned location.
+        // Discard the QR and read that visit's session without another check-in.
+        input.current = null;
+        visitId.current = e.cooldownVisitId;
+        setCooldown(e.cooldownVisitId);
+        setRecentSession(undefined);
+        await readRecentSession(e.cooldownVisitId);
+      } else {
+        setError(errorMessage(e));
+      }
     } finally {
       locked.current = false;
       if (mounted.current) setBusy(false);
@@ -75,7 +121,10 @@ export default function Scanner() {
     if (locked.current || input.current || visitId.current || paused) return;
     setPaused(true);
     try {
-      input.current = { ...parseCheckInQr(raw), idempotencyKey: randomUUID() };
+      input.current = {
+        ...parseCheckInQr(raw),
+        idempotencyKey: randomUUID(),
+      };
       void submit();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'QR no válido.');
@@ -115,8 +164,8 @@ export default function Scanner() {
   return (
     <Screen>
       <Message>
-        Apuntá al QR de la sucursal. El código no se mostrará ni se guardará en
-        el teléfono.
+        Apuntá al QR de la sucursal. El código no se mostrará ni se guardará
+        en el teléfono.
       </Message>
       <View
         style={{
@@ -139,18 +188,64 @@ export default function Scanner() {
               );
             }}
           />
-        ) : (
+        ) : busy ? (
           <Loading
             label={
-              busy
-                ? 'Registrando visita e iniciando sesión…'
-                : 'Lectura pausada'
+              cooldown
+                ? 'Consultando la sesión de esta visita…'
+                : 'Registrando visita e iniciando sesión…'
             }
           />
+        ) : (
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ color: '#ffffff', fontSize: 18 }}>
+              Lectura pausada
+            </Text>
+          </View>
         )}
       </View>
+      {cooldown ? <Message>{CHECK_IN_COOLDOWN_MESSAGE}</Message> : null}
       <ErrorMessage message={error} />
-      {error && (input.current || visitId.current) ? (
+      {cooldown && recentSession !== undefined ? (
+        <>
+          {recentSession === null ? (
+            <Message>
+              Esta visita todavía no tiene una sesión de conteo.
+            </Message>
+          ) : null}
+          <Action
+            title={recentVisitAction(recentSession)}
+            disabled={busy}
+            onPress={() => {
+              if (recentSession) {
+                store.accept(recentSession);
+                router.replace({
+                  pathname: '/session/[id]',
+                  params: { id: recentSession.id },
+                });
+              } else {
+                void submit();
+              }
+            }}
+          />
+        </>
+      ) : null}
+      {cooldown && recentSession === undefined && error ? (
+        <Action
+          title="Reintentar consulta de la sesión"
+          disabled={busy}
+          onPress={() => {
+            void retrySessionLookup();
+          }}
+        />
+      ) : null}
+      {!cooldown && error && (input.current || visitId.current) ? (
         <Action
           title={
             visitId.current

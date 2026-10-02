@@ -13,7 +13,8 @@ import {
 import { visitFixture } from '../../api/test/helpers/visit-fixture.mjs';
 import { AppModule } from '../../api/dist/app.module.js';
 import { PrismaService } from '../../api/dist/prisma/prisma.service.js';
-import { createApiClient } from '../src/core/api-client.ts';
+import { ApiError, createApiClient } from '../src/core/api-client.ts';
+import { recentVisitAction } from '../src/core/check-in-recovery.ts';
 import { createSushiApi } from '../src/core/sushi-api.ts';
 import { parseCheckInQr } from '../src/core/qr.ts';
 import { Counter } from '../src/core/counter.ts';
@@ -87,9 +88,26 @@ try {
   const visit = await api.checkIn(input);
   assert.equal(visit.status, 'PENDING');
   assert.equal((await api.checkIn(input)).id, visit.id);
+  const recoverRecentVisit = async () => {
+    let recentVisitId;
+    await assert.rejects(
+      api.checkIn({ ...input, idempotencyKey: randomUUID() }),
+      (error) => {
+        assert.equal(error.status, 409);
+        recentVisitId = error.cooldownVisitId;
+        return recentVisitId === visit.id;
+      },
+    );
+    return api.findVisitSession(recentVisitId);
+  };
+  assert.equal(await recoverRecentVisit(), null);
   const session = await api.startSession(visit.id);
   assert.equal(session.pieceCount, 0);
   assert.equal((await api.startSession(visit.id)).id, session.id);
+  assert.equal(
+    recentVisitAction(await recoverRecentVisit()),
+    'Continuar conteo',
+  );
   counter = new Counter(api, session);
   stage = 'instant local taps and real version conflict reconciliation';
   counter.tap(1);
@@ -114,24 +132,36 @@ try {
   assert.equal((await api.me()).id, userId);
   counter.tap(1);
   counter.tap(1);
-  await counter.finish();
+  // Lose only the HTTP result after the real server accepted completion.
+  // Counter must confirm COMPLETED through an authenticated history reread.
+  const completeSession = api.completeSession;
+  api.completeSession = async (...args) => {
+    await completeSession(...args);
+    throw new ApiError(0, 'Simulated lost completion response');
+  };
+  await assert.rejects(counter.finish(), (error) => error.status === 0);
+  api.completeSession = completeSession;
   assert.equal(counter.getSnapshot().session.status, 'COMPLETED');
   assert.equal(counter.getSnapshot().count, 12);
   stage = 'real history and unchanged Visit semantics';
   const final = await api.findSession(session.id);
   assert.equal(final.pieceCount, 12);
   assert.equal(final.status, 'COMPLETED');
+  const recovered = await recoverRecentVisit();
+  assert.equal(recovered.id, session.id);
+  assert.equal(recentVisitAction(recovered), 'Ver resultado');
   assert.ok((await api.visits()).items.some((row) => row.id === visit.id));
   const persistedVisit = await prisma.visit.findUniqueOrThrow({
     where: { id: visit.id },
   });
   assert.equal(persistedVisit.status, 'PENDING');
   assert.equal(persistedVisit.verifiedAt, null);
+  assert.equal(persistedVisit.checkedInAt.toISOString(), visit.checkedInAt);
   console.log(
     'PASS: mobile client -> real Supabase Auth -> NestJS -> PostgreSQL.',
   );
   console.log(
-    'Login, Bearer, QR parsing, idempotency, duplicate start, local taps, 409 reread, refresh, final sync, completion and histories verified.',
+    'Login, Bearer, QR parsing, idempotency, cooldown recovery (missing/active/completed session), version conflict, final sync, lost completion response and histories verified.',
   );
   console.log(
     'Visit remains PENDING. This is not a physical camera/SecureStore device test.',

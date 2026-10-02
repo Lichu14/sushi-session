@@ -58,12 +58,21 @@ test('Phase 3 HTTP: real NestJS, Prisma, PostgreSQL and concurrent requests; sig
       assert.equal('tokenHash' in visit,false);assert.equal('evidence' in visit,false);assert.equal(responses[0].cache,'no-store');
     });
     await t.test('a reused key with different payload or owner gets 409',async()=>{
-      for(const changed of [{locationId:l2.id},{token:'different-token'}]) assert.equal((await post('/check-ins',{...input,...changed})).status,409);
-      assert.equal((await post('/check-ins',input,other)).status,409);
+      for(const [body,access] of [[{...input,locationId:l2.id},token],[{...input,token:'different-token'},token],[input,other]]) {
+        const result=await post('/check-ins',body,access);
+        assert.equal(result.status,409);
+        assert.equal(result.data.code,undefined);
+        assert.equal(result.data.visitId,undefined,'conflicts must not reveal another user visit');
+      }
     });
     await t.test('different keys inside the four-hour window get 409 without extra uses',async()=>{
       const responses=await Promise.all(Array.from({length:3},()=>post('/check-ins',{...input,idempotencyKey:randomUUID()})));
       assert.ok(responses.every(r=>r.status===409));
+      for(const response of responses) {
+        assert.equal(response.data.code,'CHECK_IN_COOLDOWN');
+        assert.equal(response.data.visitId,visit.id);
+        assert.deepEqual(Object.keys(response.data).sort(),['code','message','statusCode','visitId']);
+      }
       assert.equal(await prisma.visitCheckInEvidence.count({where:{checkInCodeId:qr.row.id}}),1);
       assert.equal((await prisma.visit.findUnique({where:{id:visit.id}})).checkedInAt.toISOString(),visit.checkedInAt);
     });
@@ -141,10 +150,29 @@ test('Phase 3 HTTP: real NestJS, Prisma, PostgreSQL and concurrent requests; sig
       assert.equal((await post(`/visits/${visit.id}/session`,{})).status,409);
       assert.equal((await prisma.sushiSession.findUnique({where:{id:session.id}})).endedAt.toISOString(),session.endedAt);
     });
+    await t.test('completion does not remove or restart the check-in window; idempotent retry stays safe',async()=>{
+      // An earlier test revoked the original QR. A fresh QR still cannot bypass the window.
+      const freshCode=await f.code(l.id);
+      const blocked=await post('/check-ins',{...input,token:freshCode.token,idempotencyKey:randomUUID()});
+      assert.equal(blocked.status,409);
+      assert.equal(blocked.data.code,'CHECK_IN_COOLDOWN');
+      assert.equal(blocked.data.visitId,visit.id);
+      const retry=await post('/check-ins',input);
+      assert.equal(retry.status,201);
+      assert.equal(retry.data.id,visit.id);
+      assert.equal(retry.data.checkedInAt,visit.checkedInAt);
+      const conflict=await post(`/sessions/${session.id}/complete`,{version:session.version});
+      assert.equal(conflict.status,409);
+      assert.equal(conflict.data.code,undefined);
+      assert.equal(conflict.data.visitId,undefined);
+    });
     await t.test('a different key after four hours can create a new Visit',async()=>{
       const location=await f.location(),code=await f.code(location.id);
       const body={locationId:location.id,token:code.token,idempotencyKey:randomUUID()};
       const first=await post('/check-ins',body);assert.equal(first.status,201);
+      const start=await post(`/visits/${first.data.id}/session`,{});
+      assert.equal(start.status,201);
+      assert.equal((await post(`/sessions/${start.data.id}/complete`,{version:1})).status,200);
       await prisma.$executeRaw`UPDATE public.visits SET checked_in_at=clock_timestamp()-interval '4 hours 1 second' WHERE id=${first.data.id}::uuid`;
       const second=await post('/check-ins',{...body,idempotencyKey:randomUUID()});assert.equal(second.status,201);assert.notEqual(second.data.id,first.data.id);
     });

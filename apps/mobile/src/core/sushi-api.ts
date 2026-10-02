@@ -15,7 +15,7 @@ export function createSushiApi(request: Request) {
     );
   async function find(
     predicate: (row: SushiSession) => boolean,
-  ): Promise<SushiSession> {
+  ): Promise<SushiSession | null> {
     let cursor: string | undefined;
     const seen = new Set<string>();
     do {
@@ -27,7 +27,13 @@ export function createSushiApi(request: Request) {
         throw new ApiError(502, "No se pudo recorrer el historial.");
       if (cursor) seen.add(cursor);
     } while (cursor);
-    throw new ApiError(404, "No se encontró la sesión en tu historial.");
+    return null;
+  }
+  async function requireSession(predicate: (row: SushiSession) => boolean) {
+    const session = await find(predicate);
+    if (!session)
+      throw new ApiError(404, "No se encontró la sesión en tu historial.");
+    return session;
   }
   return {
     me: () => request<Profile>("/me"),
@@ -35,7 +41,9 @@ export function createSushiApi(request: Request) {
       request<Visit>("/check-ins", "POST", input),
     visits: () => request<Page<Visit>>("/me/visits?limit=100"),
     sessions,
-    findSession: (id: string) => find((row) => row.id === id),
+    findSession: (id: string) => requireSession((row) => row.id === id),
+    findVisitSession: (visitId: string) =>
+      find((row) => row.visitId === visitId),
     async startSession(visitId: string) {
       try {
         return await request<SushiSession>(
@@ -46,7 +54,7 @@ export function createSushiApi(request: Request) {
       } catch (error) {
         // Handles duplicate starts and an accepted POST whose response was lost.
         if (error instanceof ApiError && error.status === 409)
-          return find((row) => row.visitId === visitId);
+          return requireSession((row) => row.visitId === visitId);
         throw error;
       }
     },

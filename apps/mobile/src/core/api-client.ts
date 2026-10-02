@@ -1,8 +1,10 @@
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly cooldownVisitId?: string;
+  constructor(status: number, message: string, cooldownVisitId?: string) {
     super(message);
     this.status = status;
+    this.cooldownVisitId = cooldownVisitId;
   }
 }
 export function errorMessage(error: unknown): string {
@@ -59,7 +61,11 @@ export function createApiClient(
     body?: unknown,
   ): Promise<T> {
     // Callers only supply internal paths. A scanned URL must never become an API destination.
-    if (!path.startsWith('/') || path.startsWith('//') || path.includes('://'))
+    if (
+      !path.startsWith('/') ||
+      path.startsWith('//') ||
+      path.includes('://')
+    )
       throw new ApiError(400, 'Ruta no válida.');
     const initial = valid(await auth.getSession());
     let token = initial.access_token;
@@ -88,12 +94,35 @@ export function createApiClient(
           token = renewed.access_token;
           continue;
         }
-        if (!response.ok)
+        if (!response.ok) {
+          // Only this endpoint's stable code and a validated UUID are used.
+          // Never surface arbitrary server messages or sensitive response data.
+          let cooldownVisitId: string | undefined;
+          if (
+            response.status === 409 &&
+            path === '/check-ins' &&
+            method === 'POST'
+          ) {
+            const data: unknown = await response.json().catch(() => null);
+            if (
+              data &&
+              typeof data === 'object' &&
+              'code' in data &&
+              data.code === 'CHECK_IN_COOLDOWN' &&
+              'visitId' in data &&
+              typeof data.visitId === 'string' &&
+              /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(data.visitId)
+            ) {
+              cooldownVisitId = data.visitId;
+            }
+          }
           throw new ApiError(
             response.status,
             messages[response.status] ??
               'La API no está disponible. Reintentá en un momento.',
+            cooldownVisitId,
           );
+        }
         return (await response.json()) as T;
       } catch (error) {
         if (error instanceof ApiError) throw error;

@@ -85,11 +85,17 @@ export class CheckInService {
               locationId: input.locationId,
               checkedInAt: { gt: new Date(now.getTime() - CHECK_IN_WINDOW_MS) },
             },
+            orderBy: [{ checkedInAt: 'desc' }, { id: 'desc' }],
+            select: { id: true },
           });
           if (recent)
-            throw new ConflictException(
-              'Ya registraste una visita en esta sucursal durante las últimas 4 horas.',
-            );
+            throw new ConflictException({
+              statusCode: 409,
+              code: 'CHECK_IN_COOLDOWN',
+              message:
+                'Ya registraste una visita en esta sucursal durante las últimas 4 horas.',
+              visitId: recent.id,
+            });
 
           return tx.visit.create({
             data: {

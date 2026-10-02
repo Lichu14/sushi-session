@@ -24,6 +24,7 @@
     "test:visits": "pnpm build && node --test --test-concurrency=1 test/visits-persistence.integration.test.mjs test/visits-http.integration.test.mjs",
     "test:visits:live": "pnpm build && node scripts/verify-visits-development.mjs",
     "test:merchant": "pnpm build && node --test test/merchant-http.integration.test.mjs",
+    "test:dev-qr": "pnpm build && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/dev-qr.integration.test.mjs",
     "test:persistence": "pnpm build && node --test --test-concurrency=1 test/persistence.integration.test.mjs test/prisma.integration.test.mjs",
     "db:migrate:dev": "pnpm build && node scripts/migrate-development.mjs deploy",
     "db:status": "pnpm build && node scripts/migrate-development.mjs status"
@@ -48,10 +49,13 @@
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "8.23.1",
+    "jsqr": "1.4.0",
     "oxlint": "^1.58.0",
     "oxlint-tsgolint": "^7.0.2001",
+    "pngjs": "7.0.0",
     "prettier": "^3.4.2",
     "prisma": "7.10.0",
+    "qrcode": "1.5.4",
     "source-map-support": "^0.5.21",
     "typescript": "^6.0.2"
   }

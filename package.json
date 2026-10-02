@@ -9,6 +9,8 @@
   },
   "scripts": {
     "workspace:list": "pnpm list --recursive --depth -1",
+    "dev:qr": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON apps/api/scripts/dev-qr.mjs",
+    "test:api:dev-qr": "pnpm --filter @sushi-session/api test:dev-qr",
     "dev:mobile": "pnpm --filter @sushi-session/mobile start",
     "dev:mobile:web": "pnpm --filter @sushi-session/mobile web",
     "typecheck:mobile": "pnpm --filter @sushi-session/mobile typecheck",
