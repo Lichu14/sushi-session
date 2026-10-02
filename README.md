@@ -99,6 +99,8 @@ excluidos. Los dos documentos Word originales permanecen en la raíz.
 ## Arrancar desde PowerShell
 
 Herramientas verificadas: Node.js 24.17.0, pnpm 11.25.0 y Git 2.51.0.
+`.node-version` fija ese mismo Node para CI; `packageManager` en `package.json`
+fija pnpm. La instalación usa el `pnpm-lock.yaml` existente sin actualizar versiones.
 
 ```powershell
 Set-Location -LiteralPath 'C:\Users\lichu\OneDrive\Documents\Personal Projects\Sushi Session'
@@ -379,10 +381,84 @@ pnpm db:status
 
 Contrato, restricciones, pruebas y pendientes:
 [Fase 6A en la guía de la API](apps/api/README.md#fase-6a-persistencia-de-beneficios-y-reglas).
-Se revisaron el árbol local y `.github/workflows` en `main` de GitHub: no hay
-workflows de CI. Configurarlos sigue pendiente; no se ejecutó ni se atribuye
-ningún resultado a GitHub Actions. Las verificaciones de esta fase son locales
-y las pruebas de integración usan únicamente `sushi-session-dev`.
+Las comprobaciones de Fase 6A se ejecutaron localmente y contra desarrollo. El
+workflow agregado posteriormente se describe abajo y excluye esas conexiones.
+
+## CI con GitHub Actions
+
+`.github/workflows/ci.yml` define **CI / Monorepo checks** para pushes a `main` y
+pull requests cuyo destino es `main`. Corre en Ubuntu 24.04 con Node 24.17.0 y pnpm
+11.25.0. Las acciones oficiales están fijadas por SHA y la instalación ejecuta
+`pnpm install --frozen-lockfile`; un lockfile desactualizado hace fallar el job.
+
+El workflow realiza estas comprobaciones, sin `continue-on-error`:
+
+| Comprobación | Comandos |
+| --- | --- |
+| Prisma, sin conexión a PostgreSQL | `pnpm prisma:validate`, `pnpm prisma:generate` |
+| TypeScript | `pnpm typecheck:api`, `pnpm typecheck:dashboard`, `pnpm typecheck:mobile` |
+| Lint disponible | `pnpm lint:api`, `pnpm lint:dashboard` |
+| Compilación API y pruebas aisladas | `pnpm test:api:unit` (incluye build de API) |
+| Unitarias móviles y dashboard | `pnpm test:mobile`, `pnpm test:dashboard` |
+| Compilación dashboard | `pnpm build:dashboard` |
+| Compatibilidad Expo | `pnpm check:mobile:dependencies` (`expo install --check`) |
+| Exportación Expo iOS/Android/web | `pnpm export:mobile:ci` |
+
+Mobile y `packages/shared` no tienen scripts propios de lint actualmente. No se
+agrega un linter nuevo ni se presenta TypeScript como sustituto de esas revisiones.
+La exportación sólo genera JavaScript/Hermes/assets en `work/mobile-ci-export`,
+ignorado por Git. No genera APK/IPA/AAB, no usa EAS ni publica artefactos.
+
+**Pruebas incluidas:** configuración de la API, JWT con claves sintéticas y Auth
+simulado, HTTP NestJS en loopback con Prisma en memoria, argumentos/guard de la
+herramienta QR, lógica del cliente móvil y proxy del dashboard con transporte
+simulado. `test:api:unit` enumera sus archivos; no usa un glob que pueda incorporar
+accidentalmente `*.integration.test.mjs`.
+
+Las dos pruebas unitarias que estaban junto a la integración QR se trasladaron a
+`apps/api/test/dev-qr.unit.test.mjs`. El guard se verifica con una contraseña
+ficticia y sin abrir conexiones. `pnpm test:api:dev-qr` conserva ambas partes:
+ejecuta ese archivo junto con las pruebas reales de PostgreSQL. No se eliminó ninguna
+comprobación ni se omiten fallos mediante detección silenciosa de credenciales.
+
+**Integración local, fuera de CI:** `test:api:persistence`, `test:api:visits`,
+`test:api:merchant`, `test:api:rewards`, `test:api:dev-qr`, `test:api:auth:live`,
+`test:api:visits:live` y `test:mobile:live`. Requieren la configuración local de
+desarrollo y siguen disponibles. CI no ejecuta estos comandos ni `db:check`,
+`db:status`, migraciones, seeds o despliegues; no dispone de una base de datos.
+
+### Variables y permisos
+
+No se necesitan secretos de GitHub ni credenciales de Supabase/Expo. El job define
+valores ficticios en el YAML, una URL PostgreSQL con host `database.invalid` y una
+API `api.invalid`. La URL/key públicas de ejemplo sólo satisfacen el formato de
+configuración; los tests de Auth inyectan su transporte simulado y las compilaciones
+no inician login ni consultas de negocio. `EXPO_NO_DOTENV=1` impide cargar archivos
+locales de Expo. Los `.env` siguen ignorados y un paso falla si se detectan `.env`
+versionados que no sean ejemplos. No se muestran ni se cargan secretos de Actions.
+
+Se concede únicamente `contents: read`; checkout no conserva credenciales Git.
+No hay `pull_request_target`, permisos de escritura, publicación ni migraciones.
+Sólo se cachea el almacén de dependencias de pnpm. Las ejecuciones anteriores de
+la misma rama/PR se cancelan cuando llega una nueva; el job tiene límite de 30 min.
+
+### Cómo comprobarlo en GitHub
+
+1. Incluir el workflow y sus archivos relacionados en un commit y subirlo a `main`,
+   o subir una rama y abrir un PR dirigido a `main`.
+2. Abrir [Actions del repositorio](https://github.com/Lichu14/sushi-session/actions),
+   elegir **CI** y verificar que la ejecución corresponda al SHA enviado.
+3. Revisar **Monorepo checks** y cada paso; en un PR también aparece en **Checks**.
+   Un fallo de instalación, tipos, lint, pruebas o compilación debe dejarlo en rojo.
+
+Verificado localmente en Windows: actionlint, instalación con lockfile congelado,
+Prisma validate/generate, los tres chequeos TypeScript, ambos lints, build de API y
+dashboard, compatibilidad Expo y exportación iOS/Android/web. Pasaron **43 pruebas
+aisladas de API, 24 de mobile y 7 de dashboard**, sin fallos ni pruebas omitidas.
+Se usaron las variables ficticias del workflow y no se ejecutó integración contra
+Supabase. La verificación local no equivale a una ejecución del runner Ubuntu.
+Todavía no se ejecutó este workflow en GitHub Actions; su primer resultado remoto
+queda pendiente de subir el commit. No se configuró protección de rama ni despliegue.
 
 ## Referencias
 

@@ -11,57 +11,9 @@ import { validateEnvironment } from '../dist/config/environment.js';
 import { developmentConnection } from '../scripts/development-database.mjs';
 import {
   DEV_QR,
-  ownerArgument,
   prepareDevelopmentQr,
   decodeDevelopmentQr,
 } from '../scripts/dev-qr-fixture.mjs';
-
-test('dev:qr accepts only an explicit UUID owner argument', () => {
-  assert.equal(ownerArgument([]), undefined);
-  const id = randomUUID();
-  assert.equal(ownerArgument(['--owner-user-id', id.toUpperCase()]), id);
-  for (const args of [
-    ['--owner-user-id'],
-    ['--owner-user-id', 'not-a-uuid'],
-    ['--owner', id],
-    ['--owner-user-id', id, 'extra'],
-  ])
-    assert.throws(() => ownerArgument(args));
-});
-
-test('development guard refuses production, another project, pool mode and database', () => {
-  developmentConnection();
-  const saved = { ...process.env };
-  try {
-    const original = new URL(process.env.DATABASE_URL);
-    process.env.NODE_ENV = 'production';
-    assert.throws(() => developmentConnection());
-    delete process.env.NODE_ENV;
-    for (const change of [
-      (url) => {
-        url.hostname = 'db.other-project.supabase.co';
-      },
-      (url) => {
-        url.port = '6543';
-      },
-      (url) => {
-        url.pathname = '/other';
-      },
-      (url) => {
-        url.username = 'postgres.other-project';
-      },
-    ]) {
-      const url = new URL(original);
-      change(url);
-      process.env.DATABASE_URL = url.toString();
-      assert.throws(() => developmentConnection());
-    }
-  } finally {
-    process.env.DATABASE_URL = saved.DATABASE_URL;
-    if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = saved.NODE_ENV;
-  }
-});
 
 test('dev:qr real PostgreSQL rotation, PNG contract, membership and rollback', async (t) => {
   developmentConnection();

@@ -901,9 +901,9 @@ confirmó un cierre cuya respuesta se perdió y mantuvo Visit PENDING. Prisma
 validate/generate, TypeScript, lint y build de API aprobados. Las regresiones incluyen `/health`, `/me`, aislamiento comercial,
 verificación de visitas, idempotencia, cierre y bloqueo de cuatro horas.
 
-No existe `.github/workflows` en el árbol local ni en `main` del repositorio
-GitHub comprobado. Configurar CI queda pendiente; no se ejecutó ningún workflow
-remoto ni se atribuyen estas comprobaciones a GitHub Actions.
+Las verificaciones de Fase 6A fueron locales. El workflow CI incorporado después
+ejecuta sólo las pruebas aisladas descritas abajo; estos resultados de PostgreSQL
+no se atribuyen a GitHub Actions.
 
 ### Pendientes deliberados
 
@@ -923,6 +923,30 @@ Pausar una definición no equivaldrá a revocar cupones.
 No hay fórmulas de descuento grupal ni distribución aprobada por importe promedio
 por comensal. La Fase 6A se detiene en persistencia validada, sin avanzar a emisión
 o canje.
+
+## Pruebas aisladas para CI
+
+```powershell
+pnpm test:api:unit
+```
+
+Compila la API y ejecuta explícitamente `environment.test.mjs`, `auth-jwt.test.mjs`,
+`auth-http.test.mjs` y `dev-qr.unit.test.mjs`. No requiere PostgreSQL ni Supabase:
+Auth/JWKS se simulan, Prisma se sustituye en memoria y el servidor HTTP de prueba
+escucha sólo en loopback. La prueba del guard QR usa configuración ficticia y
+valida opciones sin crear un cliente ni conectarse.
+
+Las dos pruebas unitarias del QR fueron extraídas de `dev-qr.integration.test.mjs`.
+`pnpm test:api:dev-qr` sigue ejecutando ambos archivos, preservando las pruebas
+unitarias y la integración real. Los scripts `test:config` y `test:auth` también
+siguen disponibles por separado.
+
+Persistencia, visitas, membresías, rewards, QR real y los runners `:live` permanecen
+como integración local contra el entorno autorizado; no se ejecutan en CI. No se
+agregaron condiciones para omitir silenciosamente esos tests si faltan credenciales.
+El workflow no invoca migraciones ni pruebas que importen AppModule para conectarse
+a una base real. Detalles, valores ficticios y primera ejecución remota pendiente:
+[CI en el README raíz](../../README.md#ci-con-github-actions).
 
 ## Referencias
 

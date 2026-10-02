@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Monorepo checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+      EXPO_NO_TELEMETRY: '1'
+      EXPO_NO_DOTENV: '1'
+      # Syntax-only fixtures, never real credentials. No database or Supabase service.
+      DATABASE_URL: 'postgresql://ci:ci-not-a-secret@database.invalid:5432/ci?schema=public&sslmode=require&sslaccept=strict'
+      DATABASE_CA_CERT_PATH: ''
+      SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co'
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_ci_placeholder_not_a_real_key'
+      API_URL: 'https://api.invalid'
+      NEXT_PUBLIC_SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co'
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_ci_placeholder_not_a_real_key'
+      EXPO_PUBLIC_SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co'
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_ci_placeholder_not_a_real_key'
+      EXPO_PUBLIC_API_URL: 'https://api.invalid'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Set up pinned pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          # Uses packageManager from package.json; never selects latest.
+          run_install: false
+          cache: true
+          cache_dependency_path: pnpm-lock.yaml
+
+      - name: Verify toolchain and tracked environment files
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          assert.equal(process.versions.node, readFileSync('.node-version', 'utf8').trim());
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          assert.equal(`pnpm@${execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim()}`, pkg.packageManager);
+          const tracked = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0');
+          const forbidden = tracked.filter(path => /(^|\/)\.env($|\.)/.test(path) && !path.endsWith('.example'));
+          assert.deepEqual(forbidden, [], 'Only .env example files may be tracked');
+          NODE
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate and generate Prisma (no database connection)
+        run: |
+          pnpm prisma:validate
+          pnpm prisma:generate
+
+      - name: TypeScript
+        run: |
+          pnpm typecheck:api
+          pnpm typecheck:dashboard
+          pnpm typecheck:mobile
+
+      - name: Available lint checks
+        run: |
+          pnpm lint:api
+          pnpm lint:dashboard
+
+      - name: Build API and run isolated API tests
+        # Explicit allowlist: no *.integration.test.mjs or *:live runners.
+        run: pnpm test:api:unit
+
+      - name: Mobile and dashboard unit tests
+        run: |
+          pnpm test:mobile
+          pnpm test:dashboard
+
+      - name: Build dashboard
+        run: pnpm build:dashboard
+
+      - name: Check Expo dependency compatibility
+        run: pnpm check:mobile:dependencies
+
+      - name: Export Expo for iOS, Android and web
+        # JS/Hermes/assets only. No EAS, native store builds or publication.
+        run: pnpm export:mobile:ci

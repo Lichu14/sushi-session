@@ -33,6 +33,8 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
+    "check:dependencies": "expo install --check",
+    "export:ci": "expo export --platform all --output-dir ../../work/mobile-ci-export",
     "test:live": "pnpm --filter @sushi-session/api build && node test/live.mjs"
   },
   "private": true
