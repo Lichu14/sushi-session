@@ -11,7 +11,7 @@ datasource db {
   schemas  = ["public"]
 }
 
-// Contract: Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx, phases 1, 3 and 6A.
+// Contract: Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx, phases 1, 3, 6A and 6B.
 // Cross-schema Auth FK, CHECKs, deferred scope/evidence and lifecycle triggers live in migration SQL.
 // auth.users is owned by Supabase and must never be modeled here.
 
@@ -88,6 +88,7 @@ model User {
   memberships        MerchantMembership[] @relation("MembershipUser")
   invitedMemberships MerchantMembership[] @relation("MembershipInviter")
   visits             Visit[]
+  coupons            Coupon[]
 
   @@map("users")
   @@schema("public")
@@ -389,7 +390,7 @@ model RewardLocation {
   @@schema("public")
 }
 
-// Persistence only: no evaluator, coupon emission or publication freeze yet.
+// Conditions and reward identity freeze after first RULE issuance (SQL triggers).
 model RewardRule {
   id                   String          @id @default(uuid()) @db.Uuid
   rewardId             String          @map("reward_id") @db.Uuid
@@ -406,9 +407,63 @@ model RewardRule {
   createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  reward Reward @relation(fields: [rewardId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reward        Reward             @relation(fields: [rewardId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  couponOrigins CouponRuleOrigin[]
 
   @@index([rewardId, status])
   @@map("reward_rules")
+  @@schema("public")
+}
+
+enum CouponSource {
+  RULE
+  CAMPAIGN
+  MANUAL
+
+  @@map("coupon_source")
+  @@schema("public")
+}
+
+enum CouponStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  REVOKED
+
+  @@map("coupon_status")
+  @@schema("public")
+}
+
+// Only RULE is supported in 6B. Deferred SQL enforces exactly one origin.
+model Coupon {
+  id                  String       @id @default(uuid()) @db.Uuid
+  userId              String       @map("user_id") @db.Uuid
+  source              CouponSource
+  publicCode          String       @unique @map("public_code") @db.VarChar(32)
+  status              CouponStatus
+  issuedAt            DateTime     @map("issued_at") @db.Timestamptz(6)
+  expiresAt           DateTime?    @map("expires_at") @db.Timestamptz(6)
+  issuanceKey         String       @unique @map("issuance_key") @db.VarChar(200)
+  eligibilitySnapshot Json         @map("eligibility_snapshot") @db.JsonB
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  ruleOrigin CouponRuleOrigin?
+
+  @@index([userId, status, expiresAt])
+  @@map("coupons")
+  @@schema("public")
+}
+
+model CouponRuleOrigin {
+  couponId     String @id @map("coupon_id") @db.Uuid
+  rewardRuleId String @map("reward_rule_id") @db.Uuid
+
+  coupon Coupon     @relation(fields: [couponId], references: [id], onDelete: NoAction, onUpdate: Restrict)
+  rule   RewardRule @relation(fields: [rewardRuleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([rewardRuleId, couponId])
+  @@map("coupon_rule_origins")
   @@schema("public")
 }

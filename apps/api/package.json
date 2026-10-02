@@ -19,7 +19,7 @@
     "prisma:validate": "prisma validate",
     "db:check": "pnpm build && node dist/prisma/check-connection.js",
     "test:config": "pnpm build && node --test test/environment.test.mjs",
-    "test:unit": "pnpm build && node --test test/environment.test.mjs test/auth-jwt.test.mjs test/auth-http.test.mjs test/dev-qr.unit.test.mjs",
+    "test:unit": "pnpm build && node --test test/environment.test.mjs test/auth-jwt.test.mjs test/auth-http.test.mjs test/dev-qr.unit.test.mjs test/reward-evaluation.unit.test.mjs",
     "test:auth": "pnpm build && node --test test/auth-jwt.test.mjs test/auth-http.test.mjs",
     "test:auth:live": "pnpm build && node scripts/verify-auth-development.mjs",
     "test:visits": "pnpm build && node --test --test-concurrency=1 test/visits-persistence.integration.test.mjs test/visits-http.integration.test.mjs",
@@ -28,6 +28,7 @@
     "test:dev-qr": "pnpm build && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/dev-qr.unit.test.mjs test/dev-qr.integration.test.mjs",
     "test:persistence": "pnpm build && node --test --test-concurrency=1 test/persistence.integration.test.mjs test/prisma.integration.test.mjs",
     "test:rewards": "pnpm build && node --test test/rewards-persistence.integration.test.mjs",
+    "test:coupons": "pnpm build && node --test --test-concurrency=1 test/coupons-persistence.integration.test.mjs test/coupons-flow.integration.test.mjs",
     "db:migrate:dev": "pnpm build && node scripts/migrate-development.mjs deploy",
     "db:status": "pnpm build && node scripts/migrate-development.mjs status"
   },

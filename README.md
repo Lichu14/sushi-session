@@ -29,11 +29,12 @@ visitas y confirmación/rechazo desde un dashboard mínimo Next.js + TypeScript.
 Se utilizan los modelos existentes: no hubo nuevas migraciones ni cambios en Auth,
 Storage, rewards, campañas o cupones.
 
-La Fase 6A agrega únicamente persistencia para `Reward`, `RewardLocation` y
-`RewardRule`, con restricciones SQL y RLS. No hay evaluación, emisión, canje,
-cálculo de descuentos ni nuevas pantallas de beneficios. Las tres migraciones
-están aplicadas en `sushi-session-dev`; el contador y su recuperación conservan
-el comportamiento ya implementado.
+La Fase 6A agregó persistencia para `Reward`, `RewardLocation` y `RewardRule`.
+La Fase 6B agrega `Coupon` y `CouponRuleOrigin`, evaluación transaccional al
+confirmar visitas y `GET /me/coupons`. Sólo se emite por reglas de visitas
+VERIFIED; no hay canje, campañas, cálculo de descuentos ni pantallas nuevas.
+Las cinco migraciones están aplicadas en `sushi-session-dev`; el contador,
+su recuperación y el bloqueo operativo de cuatro horas conservan su comportamiento.
 
 ## Estructura
 
@@ -64,7 +65,8 @@ apps/
       auth/               # AuthGuard, CurrentUser, AuthProfileService y GET /me
       visits/             # CheckInService, SushiSessionService y sus endpoints
       merchant/           # Autorización por alcance y revisión de visitas
-    prisma/schema.prisma  # Doce modelos y dieciséis enums (Fases 1, 3 y 6A), solo public
+      rewards/            # Evaluación de reglas, emisión RULE y consulta propia de cupones
+    prisma/schema.prisma  # Catorce modelos y dieciocho enums, solo public
     prisma/migrations/    # Historial Prisma con integridad SQL adicional
     scripts/              # Migración y verificación limitadas a desarrollo
     test/                 # Configuración, catálogo, integridad, Prisma y HTTP
@@ -194,9 +196,9 @@ una compilación APK/IPA. El diagnóstico `expo-doctor` de la etapa inicial pas�
 
 ## Punto de revisión
 
-La etapa actual termina en Fase 6A: app móvil y dashboard comercial implementados,
-verificación de visitas disponible y persistencia de beneficios/reglas preparada.
-Quedan pendientes evaluación y emisión de beneficios, campañas, cupones y canje.
+La etapa actual termina en Fase 6B: app móvil y dashboard comercial implementados,
+verificación de visitas y emisión por reglas disponibles, con consulta propia de cupones.
+Quedan pendientes campañas, emisión manual, canje y pantallas/gestión de beneficios.
 Las pruebas automatizadas no sustituyen la aceptación física en un teléfono.
 La arquitectura, los contratos HTTP y las pruebas están en [apps/api/README.md](apps/api/README.md).
 
@@ -422,7 +424,7 @@ ejecuta ese archivo junto con las pruebas reales de PostgreSQL. No se eliminó n
 comprobación ni se omiten fallos mediante detección silenciosa de credenciales.
 
 **Integración local, fuera de CI:** `test:api:persistence`, `test:api:visits`,
-`test:api:merchant`, `test:api:rewards`, `test:api:dev-qr`, `test:api:auth:live`,
+`test:api:merchant`, `test:api:rewards`, `test:api:coupons`, `test:api:dev-qr`, `test:api:auth:live`,
 `test:api:visits:live` y `test:mobile:live`. Requieren la configuración local de
 desarrollo y siguen disponibles. CI no ejecuta estos comandos ni `db:check`,
 `db:status`, migraciones, seeds o despliegues; no dispone de una base de datos.
@@ -451,14 +453,46 @@ la misma rama/PR se cancelan cuando llega una nueva; el job tiene límite de 30 
 3. Revisar **Monorepo checks** y cada paso; en un PR también aparece en **Checks**.
    Un fallo de instalación, tipos, lint, pruebas o compilación debe dejarlo en rojo.
 
-Verificado localmente en Windows: actionlint, instalación con lockfile congelado,
+Verificación inicial de CI en Windows: actionlint, instalación con lockfile congelado,
 Prisma validate/generate, los tres chequeos TypeScript, ambos lints, build de API y
 dashboard, compatibilidad Expo y exportación iOS/Android/web. Pasaron **43 pruebas
 aisladas de API, 24 de mobile y 7 de dashboard**, sin fallos ni pruebas omitidas.
 Se usaron las variables ficticias del workflow y no se ejecutó integración contra
 Supabase. La verificación local no equivale a una ejecución del runner Ubuntu.
-Todavía no se ejecutó este workflow en GitHub Actions; su primer resultado remoto
-queda pendiente de subir el commit. No se configuró protección de rama ni despliegue.
+La primera ejecución remota del workflow fue exitosa para el commit
+`ce06cecc7615eb41301f1df0da2d588b7fa7b65f`: [CI / Monorepo checks](https://github.com/Lichu14/sushi-session/actions/runs/36954101077).
+Ese resultado corresponde a la configuración anterior a Fase 6B. Los nuevos tests
+aislados se incorporan a `test:api:unit`, pero esta fase no se subió ni se verificó
+remotamente. No se configuró protección de rama ni despliegue.
+
+## Fase 6B: emisión por visitas verificadas
+
+Una nueva confirmación comercial `PENDING → VERIFIED` evalúa las reglas activas
+del restaurante para **el dueño de la visita**. Confirmación, snapshot, cupón y
+origen se guardan en una sola transacción. Una regla no cumplida no impide confirmar;
+un fallo de emisión revierte todo. Repetir una confirmación ya resuelta no reevalúa.
+
+El cómputo incluye sólo VERIFIED dentro del alcance del beneficio. Aplica ventana
+UTC inclusiva, orden por fecha/UUID y espaciado desde la última visita contabilizada.
+Ni las piezas ni la SushiSession intervienen. Cero RewardLocation sigue significando
+todas las sucursales; tras emitir se protegen condiciones, relaciones y selecciones.
+
+`GET /me/coupons?limit=50&cursor=<uuid>` devuelve sólo los cupones propios, sus
+condiciones y el estado efectivo al consultar. Un ISSUED vencido se presenta como
+EXPIRED sin escribir en el GET. No hay interfaz nueva ni endpoint para emitir.
+
+```powershell
+pnpm test:api:unit       # Incluye reglas/cupones con dobles; también corre en CI
+pnpm test:api:coupons    # PostgreSQL de desarrollo y fixtures aislados; nunca en CI
+pnpm db:status
+```
+
+Contrato de fechas, bloqueo, snapshot, retención, migraciones y límites de pruebas:
+[Fase 6B en la guía de API](apps/api/README.md#fase-6b-evaluación-y-emisión-rule).
+La fase pasó 58 pruebas aisladas de API, 44 de cupones contra PostgreSQL y las
+regresiones de API/mobile/dashboard. Prisma validate/generate, TypeScript, lint y
+build de API y el estado de las cinco migraciones se verificaron localmente.
+Las huellas de las doce tablas preexistentes quedaron intactas tras limpiar fixtures.
 
 ## Referencias
 

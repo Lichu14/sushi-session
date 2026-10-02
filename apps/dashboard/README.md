@@ -113,7 +113,9 @@ Prueba manual: iniciar sesión con un miembro autorizado, verificar las sucursal
 permitidas, confirmar una visita PENDING, rechazar otra con motivo y consultar los
 estados finales. Repetir con ANALYST y membresía SUSPENDED. Comprobar carga, lista
 vacía, error si se detiene la API y cierre de sesión. La evidencia QR y SushiSession
-deben permanecer intactas. No hay rewards, campañas, cupones ni redenciones.
+deben permanecer intactas. Desde Fase 6B, confirmar una visita también evalúa y
+emite cupones RULE en NestJS de forma atómica. La respuesta del dashboard se
+conserva; no hay pantallas de beneficios, campañas ni canje en este panel.
 
 Verificación realizada: siete tests del proxy, TypeScript, lint y build aprobados;
 navegador con login real, listado y alcance de sucursales, confirmación QR, rechazo

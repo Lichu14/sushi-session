@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module.js';
+import { RewardsModule } from '../rewards/rewards.module.js';
 import { MerchantController } from './merchant.controller.js';
 import { MerchantVisitsService } from './merchant-visits.service.js';
 import { MerchantAuthorizationService } from './merchant-authorization.service.js';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, RewardsModule],
   controllers: [MerchantController],
   providers: [MerchantAuthorizationService, MerchantVisitsService],
   exports: [MerchantAuthorizationService],

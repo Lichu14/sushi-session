@@ -35,6 +35,7 @@
     "db:check": "pnpm --filter @sushi-session/api db:check",
     "test:api:config": "pnpm --filter @sushi-session/api test:config",
     "test:api:unit": "pnpm --filter @sushi-session/api test:unit",
+    "test:api:coupons": "pnpm --filter @sushi-session/api test:coupons",
     "test:api:auth": "pnpm --filter @sushi-session/api test:auth",
     "test:api:auth:live": "pnpm --filter @sushi-session/api test:auth:live",
     "test:api:visits": "pnpm --filter @sushi-session/api test:visits",

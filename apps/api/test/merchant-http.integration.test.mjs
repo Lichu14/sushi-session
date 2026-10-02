@@ -9,6 +9,7 @@ import { SupabaseJwtService } from '../dist/auth/supabase-jwt.service.js';
 import { AuthProfileService } from '../dist/auth/auth-profile.service.js';
 import { MerchantVisitsService } from '../dist/merchant/merchant-visits.service.js';
 import { MerchantAuthorizationService } from '../dist/merchant/merchant-authorization.service.js';
+import { RewardEvaluationService } from '../dist/rewards/reward-evaluation.service.js';
 import { authFixture } from './helpers/auth-fixture.mjs';
 import { visitFixture } from './helpers/visit-fixture.mjs';
 import {
@@ -575,6 +576,7 @@ test('Merchant HTTP: real PostgreSQL authorization, isolation and transitions', 
               const service = new MerchantVisitsService(
                 adapter,
                 new MerchantAuthorizationService(),
+                  new RewardEvaluationService(),
               );
               const result = await service.verify(profile.id, row.id, {});
               assert.equal(result.status, 'VERIFIED');

@@ -8,8 +8,9 @@ La Fase 3 implementa check-in QR, visitas y sesiones de conteo con concurrencia
 optimista. Las migraciones se aplican únicamente en `sushi-session-dev`.
 La Fase 5 agrega autorización comercial y revisión de visitas con los modelos
 existentes, sin nuevas migraciones.
-La Fase 6A agrega Reward, RewardLocation y RewardRule: persistencia y restricciones,
-sin evaluador, emisión ni canje. El historial contiene tres migraciones aplicadas.
+La Fase 6A agregó Reward, RewardLocation y RewardRule. La Fase 6B incorpora
+Coupon/CouponRuleOrigin, evaluación y emisión RULE al verificar visitas, y
+`GET /me/coupons`. El historial contiene cinco migraciones aplicadas. No hay canje.
 
 ## Arranque desde PowerShell
 
@@ -212,7 +213,7 @@ perfil `ACTIVE`. Una consulta independiente desde Supabase confirmó su relació
 ## Prisma y alcance de la base
 
 `prisma/schema.prisma` declara `provider = "postgresql"` y `schemas = ["public"]`.
-Contiene doce modelos y dieciséis enums de las Fases 1, 3 y 6A del documento
+Contiene catorce modelos y dieciocho enums de las Fases 1, 3, 6A y 6B del documento
 `Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx`.
 Todos usan `@@schema("public")`, con tablas, columnas y tipos enum en `snake_case`.
 Supabase administra `auth` y `storage`: no se modelan ni se ejecuta DDL sobre ellos.
@@ -602,7 +603,8 @@ de v1.1: agregar índices de actores de auditoría cuando una consulta real los 
 
 La Fase 3 incorporó únicamente check-in y sesiones. El login móvil y el dashboard
 se implementaron posteriormente en las Fases 4 y 5; la Fase 6A incorpora la
-persistencia de beneficios y reglas descrita más abajo. Emisión y canje siguen pendientes.
+persistencia de beneficios y reglas descrita más abajo. La emisión RULE se agregó
+en Fase 6B; el canje sigue pendiente.
 
 ## Fase 5: autorización comercial y revisión de visitas
 
@@ -780,7 +782,7 @@ Contrato: `Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx`, diccionario
 fidelización y secciones 9–11. Se agregaron sólo `Reward`, `RewardLocation`,
 `RewardRule` y cuatro enums: `RewardType`, `LifecycleStatus`, `RuleMetric`,
 `RuleOperator`. Prisma continúa limitado a `public`. No hay referencias Prisma
-a Coupon, Campaign o Redemption porque esos modelos todavía no existen.
+a Campaign o Redemption. Coupon y su origen RULE se agregaron después, en Fase 6B.
 
 ### Modelo y validaciones
 
@@ -905,24 +907,149 @@ Las verificaciones de Fase 6A fueron locales. El workflow CI incorporado despué
 ejecuta sólo las pruebas aisladas descritas abajo; estos resultados de PostgreSQL
 no se atribuyen a GitHub Actions.
 
-### Pendientes deliberados
+### Evolución posterior
 
-No están implementados RewardEvaluationService, emisión de premios, puntos,
-Coupon y sus orígenes, Campaign, Redemption, endpoints de gestión ni pantallas.
-La futura evaluación deberá contar únicamente visitas VERIFIED, ordenar por
-`checkedInAt` e `id`, aplicar ventana/espaciado y emitir de forma idempotente.
-`pieceCount` no es criterio de recompensa.
+La evaluación, emisión RULE, snapshots y congelamiento de Reward/RewardRule
+se implementan en Fase 6B, descrita a continuación. Campaign, otros orígenes,
+canje, puntos, gestión y pantallas permanecen pendientes. No hay fórmulas de
+descuento grupal ni distribución aprobada por importe promedio por comensal.
 
-También queda pendiente congelar condiciones, FK y selecciones de Reward,
-RewardRule y Campaign después de la primera emisión, respaldado por los futuros
-orígenes de Coupon. Hoy no existe esa inmutabilidad ligada a emisión. El posterior
-desarrollo deberá impedir que una edición o eliminación de asociaciones cambie
-lo prometido en cupones emitidos, capturar snapshots y resolver expiración/canje.
-Pausar una definición no equivaldrá a revocar cupones.
+## Fase 6B: evaluación y emisión RULE
 
-No hay fórmulas de descuento grupal ni distribución aprobada por importe promedio
-por comensal. La Fase 6A se detiene en persistencia validada, sin avanzar a emisión
-o canje.
+`RewardEvaluationService` recibe la misma transacción que usa
+`MerchantVisitsService` al confirmar `PENDING → VERIFIED`. Evalúa para Visit.userId,
+nunca para el empleado autenticado. Mantiene la respuesta comercial anterior:
+el dashboard sigue recibiendo la visita y no necesita cambios. La autorización por
+rol, membresía ACTIVE, sucursal y restaurante sigue siendo obligatoria.
+
+### Persistencia y decisiones históricas
+
+`Coupon` contiene los atributos v1.1: UUID, usuario, source, publicCode varchar(32),
+estado, issuedAt/expiresAt, issuanceKey varchar(200), eligibilitySnapshot jsonb y
+auditoría. No duplica rewardId/restaurantId. `CouponRuleOrigin.couponId` es PK/FK y
+`rewardRuleId` resuelve Reward → Restaurant. Hay índice `(rewardRuleId,couponId)`,
+índice de billetera `(userId,status,expiresAt)` y UNIQUE para código y clave.
+CouponSource conserva RULE/CAMPAIGN/MANUAL, pero un CHECK admite sólo RULE.
+No hay relaciones hacia Campaign, orígenes manuales/campaña ni Redemption.
+
+El código público usa 24 bytes criptográficamente aleatorios (192 bits), codificados
+en 32 caracteres base64url. No se registra en logs; sólo se expone al propietario.
+La clave es `rule:{ruleId}:user:{userId}`. SQL comprueba su coherencia y unicidad:
+un cupón EXPIRED/REVOKED sigue consumiendo la única emisión de esa regla.
+
+Dos constraint triggers diferidos exigen el origen al confirmar la transacción.
+No se permite cambiarlo ni borrarlo/recrearlo mientras sobreviva el cupón.
+El snapshot versión 1 es un objeto validado: destinatario, regla/beneficio,
+instante, visita disparadora, condiciones numéricas y vigencias, alcance,
+visitas contabilizadas (UUID/sucursal/fecha), count y eligible=true. SQL valida
+estructura, tipos, umbral, orden, espaciado, ventana, correspondencia con la regla
+y hechos VERIFIED del propietario en alcance al emitir. No se reconstruye en GET.
+Se prohíbe cambiar snapshot, usuario, origen, código, clave y fechas de emisión.
+
+Reward y la RewardRule usada congelan condiciones y FKs tras emitir; RewardLocation
+bloquea altas, cambios y bajas, incluida la última selección. Cero selecciones
+sigue incluyendo sucursales futuras del restaurante. Archivar una sucursal no
+elimina asociaciones. Sólo status y updatedAt de definiciones pueden cambiar:
+pausar/archivar frena nuevas emisiones sin revocar cupones ni cambiar sus términos.
+Cambiar una oferta exige nuevas definiciones.
+
+Una restricción adicional impide borrar historia de cupones mientras exista su
+Reward, evitando reiniciar el límite de emisión o liberar condiciones publicadas.
+La limpieza de fixtures puede eliminar atómicamente **todo su grafo de beneficio**,
+con FK diferidas; no puede conservar/recrear el mismo Reward. No se expone ninguna
+ruta de borrado o mantenimiento y nunca se aplica esa limpieza a datos del usuario.
+
+### Tiempo, selección y concurrencia
+
+Se obtiene `t` del reloj de PostgreSQL después de bloquear definiciones, truncado
+a milisegundos para la representación Date/JSON. Vigencias de regla y beneficio:
+inicio inclusivo, fin exclusivo `[startsAt, endsAt)`; NULL abre ese extremo.
+El historial usa `[t − windowDays × 24h, t]`, ambos extremos incluidos, o todo el
+historial hasta t si windowDays es NULL. Se ordena por checkedInAt e id y se elige
+la primera visita, luego las separadas al menos minVisitSpacingHours desde la
+última **contabilizada**, aun cuando sean de sucursales distintas.
+
+Sólo se consultan visitas VERIFIED del usuario en el restaurante y la selección
+de Reward; el disparador también debe estar en ese alcance. Una sucursal archivada
+no elimina sus visitas históricas del alcance. No intervienen pieceCount, duración,
+estado del contador ni la ventana operativa independiente de cuatro horas.
+No se fija un umbral global: cada regla conserva su threshold.
+
+Orden del servicio: User destinatario (como check-in), membresía/restaurant/location
+para autorización, Visit, Rewards ordenados por UUID y luego RewardRules ordenadas.
+El bloqueo User se adquiere **antes de actualizar la visita**, con READ COMMITTED:
+la segunda confirmación ve el progreso confirmado por la primera. Los triggers
+de origen escriben/bloquean Reward antes de RewardRule; los de selecciones ya
+bloqueaban sus Rewards en Fase 6A. Una edición ganadora se ve antes de evaluar;
+si gana la emisión, la edición comercial queda bloqueada y luego se rechaza.
+Los escritores masivos futuros deben respetar este orden; se conservan los tres
+intentos transaccionales para 40001/40P01/P2034 del helper existente.
+
+Confirmación, evaluación, snapshot y origen se confirman juntos. Un fallo revierte
+todo y produce error; no se transforma una emisión fallida en éxito de la visita.
+Si la regla no se cumple, la visita se confirma sin cupón. Repetir VERIFIED conserva
+verifiedAt y no reevalúa. No hay llamadas de red ni tareas externas dentro de la
+transacción; tampoco backfill, evaluación en arranque o emisión al leer historiales.
+
+issuedAt=t; expiresAt=t + validDaysAfterIssue × 24h UTC, o NULL sin vencimiento.
+No depende de medianoches locales ni cambios de horario. Al leer, ISSUED con
+expiresAt <= hora del servidor devuelve estado efectivo EXPIRED. REVOKED/REDEEMED
+se conservan. No hay actualizaciones ocultas ni cron que materialice expiración.
+
+### Consulta y seguridad
+
+`GET /me/coupons?limit=50&cursor=<uuid>` usa AuthGuard global y `@CurrentUser()`.
+Sólo admite limit (1–100) y cursor propio; rechaza userId/condiciones enviadas por
+cliente. Pagina por issuedAt/id descendentes. Devuelve `{items,nextCursor}` y
+`Cache-Control: no-store`. Cada item incluye id, publicCode, status efectivo,
+issuedAt, expiresAt, reward (nombre/descripción/tipo/valor decimal como string/
+moneda/referencia/condiciones), restaurant y scope derivado. No devuelve snapshot,
+issuanceKey, entidades completas ni datos de otros usuarios.
+
+Migraciones aditivas revisadas y aplicadas sólo mediante `db:migrate:dev`:
+
+- `20261002010000_phase_6b_rule_coupons`: tablas, enums, integridad y publicación.
+- `20261002011000_phase_6b_coupon_history_retention`: cierra el borrado de historia
+  como vía de desbloqueo; se creó separada porque la anterior ya estaba aplicada.
+
+Ambas se ensayaron con ROLLBACK antes de aplicar. Prisma sigue en public; no se
+editaron migraciones anteriores ni se modificaron auth/storage/.env/dependencias.
+Las tablas nuevas tienen RLS sin políticas y permisos revocados a PUBLIC/anon/
+authenticated. Las funciones usan SECURITY INVOKER y search_path=pg_catalog;
+su EXECUTE no está disponible a clientes. Todas las escrituras pasan por NestJS.
+
+### Pruebas y límites
+
+`pnpm test:api:unit` incorpora `reward-evaluation.unit.test.mjs` al CI existente:
+ventana, espaciado, vigencias, umbral, alcance, destinatario, clave, expiración,
+rollback y confirmación repetida, sin conexiones reales.
+`pnpm test:api:coupons` ejecuta catálogo/restricciones y flujo NestJS con PostgreSQL
+de desarrollo. Comprueba simultaneidad, edición versus primera emisión, retención,
+aislamiento, paginación, Auth obligatorio y preservación de `/health`/`/me`.
+Los fixtures usan FREE_ITEM, umbrales particulares y restaurantes nuevos con UUID;
+reutilizan un User existente y nunca crean identidades en auth.users.
+Las pruebas HTTP de esta suite simulan JWT/JWKS/Auth; no son un nuevo login manual
+ni una prueba de canje. La expiración de la consulta usa un reloj adelantado de
+prueba, conservando intactas las fechas históricas almacenadas.
+
+Resultado local de Fase 6B: **58 pruebas aisladas de API**, **44 de cupones contra
+PostgreSQL**, y todas las regresiones ejecutadas aprobadas: membresías (22),
+beneficios/reglas (83), visitas/sesiones (62), persistencia base (38), herramienta
+QR (11), mobile (24) y dashboard (7). Las dos unitarias QR también forman parte
+del grupo aislado; esos conteos por comando no deben sumarse como casos únicos.
+No hubo pruebas fallidas u omitidas en la ejecución final.
+Prisma validate/generate, TypeScript, lint y build de API pasaron. Se comprobó
+el catálogo nuevo (columnas/tipos/enums, PK/FK, índices, constraints y RLS/permisos)
+y `db:status` confirmó las cinco migraciones al día. Huellas antes/después
+confirman que las doce tablas preexistentes y el catálogo de schemas administrados
+se conservaron, los checksums aplicados coinciden y los fixtures dejaron cero
+cupones/orígenes de prueba. No se renovó la verificación visual del dashboard ni
+se generaron nuevos builds nativos de Expo en esta fase.
+
+No se agregaron credenciales a CI ni pruebas de PostgreSQL a Actions. No se hizo
+push de esta fase: los resultados remotos anteriores no verifican estos cambios.
+Pendientes: canje/Redemption, campañas, concesión manual, notificaciones, gestión
+de beneficios, pantallas móviles de cupones y cualquier cálculo de descuentos.
 
 ## Pruebas aisladas para CI
 
@@ -931,7 +1058,7 @@ pnpm test:api:unit
 ```
 
 Compila la API y ejecuta explícitamente `environment.test.mjs`, `auth-jwt.test.mjs`,
-`auth-http.test.mjs` y `dev-qr.unit.test.mjs`. No requiere PostgreSQL ni Supabase:
+`auth-http.test.mjs`, `dev-qr.unit.test.mjs` y `reward-evaluation.unit.test.mjs`. No requiere PostgreSQL ni Supabase:
 Auth/JWKS se simulan, Prisma se sustituye en memoria y el servidor HTTP de prueba
 escucha sólo en loopback. La prueba del guard QR usa configuración ficticia y
 valida opciones sin crear un cliente ni conectarse.
@@ -941,11 +1068,11 @@ Las dos pruebas unitarias del QR fueron extraídas de `dev-qr.integration.test.m
 unitarias y la integración real. Los scripts `test:config` y `test:auth` también
 siguen disponibles por separado.
 
-Persistencia, visitas, membresías, rewards, QR real y los runners `:live` permanecen
+Persistencia, visitas, membresías, rewards, cupones, QR real y los runners `:live` permanecen
 como integración local contra el entorno autorizado; no se ejecutan en CI. No se
 agregaron condiciones para omitir silenciosamente esos tests si faltan credenciales.
 El workflow no invoca migraciones ni pruebas que importen AppModule para conectarse
-a una base real. Detalles, valores ficticios y primera ejecución remota pendiente:
+a una base real. Detalles, valores ficticios y ejecución remota de la configuración original:
 [CI en el README raíz](../../README.md#ci-con-github-actions).
 
 ## Referencias

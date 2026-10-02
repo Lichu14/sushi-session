@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RewardEvaluationService } from '../rewards/reward-evaluation.service.js';
 import { databaseOperation } from '../visits/database-operation.js';
 import { uuid } from '../visits/inputs.js';
 import { MerchantAuthorizationService } from './merchant-authorization.service.js';
@@ -37,6 +38,7 @@ export class MerchantVisitsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly authorization: MerchantAuthorizationService,
+    private readonly rewards: RewardEvaluationService,
   ) {}
 
   async locations(userId: string, query: unknown) {
@@ -146,12 +148,15 @@ export class MerchantVisitsService {
         async (tx) => {
           const origin = await tx.visit.findUnique({
             where: { id },
-            select: { locationId: true },
+            select: { locationId: true, userId: true },
           });
           if (!origin)
             throw new NotFoundException(
               'No se encontró la visita dentro de tu alcance.',
             );
+          // Same leading User lock as check-in. Acquire before any visit lock:
+          // two concurrent verifications must see each other's committed progress.
+          await tx.$queryRaw`SELECT id FROM public.users WHERE id = ${origin.userId}::uuid FOR UPDATE`;
           await this.authorization.lockReviewAccess(
             tx,
             userId,
@@ -159,7 +164,11 @@ export class MerchantVisitsService {
           );
           await tx.$queryRaw`SELECT id FROM public.visits WHERE id = ${id}::uuid FOR UPDATE`;
           const current = await tx.visit.findUnique({ where: { id } });
-          if (!current || current.locationId !== origin.locationId)
+          if (
+            !current ||
+            current.locationId !== origin.locationId ||
+            current.userId !== origin.userId
+          )
             throw new ConflictException(
               'La visita cambió. Actualizá el listado.',
             );
@@ -180,7 +189,7 @@ export class MerchantVisitsService {
           const [clock] = await tx.$queryRaw<
             { now: Date }[]
           >`SELECT clock_timestamp() AS now`;
-          return tx.visit.update({
+          const result = await tx.visit.update({
             where: { id },
             data: {
               status,
@@ -189,6 +198,8 @@ export class MerchantVisitsService {
             },
             select: visitSelect,
           });
+          if (status === 'VERIFIED') await this.rewards.evaluate(tx, current);
+          return result;
         },
         { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 15_000 },
       ),
