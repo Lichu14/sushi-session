@@ -37,6 +37,7 @@
     "test:api:visits": "pnpm --filter @sushi-session/api test:visits",
     "test:api:visits:live": "pnpm --filter @sushi-session/api test:visits:live",
     "test:api:persistence": "pnpm --filter @sushi-session/api test:persistence",
+    "test:api:rewards": "pnpm --filter @sushi-session/api test:rewards",
     "db:migrate:dev": "pnpm --filter @sushi-session/api db:migrate:dev",
     "db:status": "pnpm --filter @sushi-session/api db:status"
   }

@@ -235,5 +235,7 @@ PENDING y verifiedAt vacío. No se hizo un build APK/IPA ni una prueba de teléf
 8. Pasar a segundo plano y volver; comprobar renovación/continuidad del login.
 9. Cerrar sesión; reabrir y confirmar que las rutas privadas no son accesibles.
 
-No se avanzó a dashboard, rewards, campañas, validación de visitas ni publicación
-en tiendas. La Fase 4 termina aquí.
+El dashboard y la verificación comercial de visitas ya están implementados en
+Fase 5. La Fase 6A agrega persistencia de beneficios y reglas en la API; no agrega
+pantallas ni emisión, canje o cálculo de descuentos al móvil. Campañas, cupones y
+publicación en tiendas siguen pendientes.

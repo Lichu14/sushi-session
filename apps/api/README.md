@@ -5,9 +5,11 @@ Conectada al PostgreSQL de desarrollo de Supabase mediante el Session pooler.
 La Fase 2 integra Supabase Auth: valida el JWT, provisiona el perfil público con el
 mismo UUID y expone `GET /me` protegido. `GET /health` sigue siendo público.
 La Fase 3 implementa check-in QR, visitas y sesiones de conteo con concurrencia
-optimista. Las dos migraciones están aplicadas únicamente en `sushi-session-dev`.
+optimista. Las migraciones se aplican únicamente en `sushi-session-dev`.
 La Fase 5 agrega autorización comercial y revisión de visitas con los modelos
 existentes, sin nuevas migraciones.
+La Fase 6A agrega Reward, RewardLocation y RewardRule: persistencia y restricciones,
+sin evaluador, emisión ni canje. El historial contiene tres migraciones aplicadas.
 
 ## Arranque desde PowerShell
 
@@ -80,8 +82,8 @@ y la conectividad entre dispositivos.
 
 Solo se agregaron estas dos variables de Auth. No se necesita JWT secret, secret key,
 service role ni una clave privada. Las claves administrativas y la URL PostgreSQL
-nunca deben colocarse en Expo. La app móvil podrá usar la clave publicable cuando
-se implemente su login, pero en esta fase no se modificó la app.
+nunca deben colocarse en Expo. La app móvil ya usa la clave publicable para el login
+implementado en Fase 4; el dashboard usa su propia configuración pública de Auth.
 
 `ConfigModule` carga únicamente el `.env` de la API, independientemente del directorio
 desde el que se ejecute Node. Las variables del proceso tienen prioridad sobre el
@@ -210,8 +212,8 @@ perfil `ACTIVE`. Una consulta independiente desde Supabase confirmó su relació
 ## Prisma y alcance de la base
 
 `prisma/schema.prisma` declara `provider = "postgresql"` y `schemas = ["public"]`.
-Contiene los cinco modelos y seis enums de la Fase 1 del documento
-`Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx` (secciones 5, 6, 9–13).
+Contiene doce modelos y dieciséis enums de las Fases 1, 3 y 6A del documento
+`Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx`.
 Todos usan `@@schema("public")`, con tablas, columnas y tipos enum en `snake_case`.
 Supabase administra `auth` y `storage`: no se modelan ni se ejecuta DDL sobre ellos.
 La migración agrega sobre `public.users` la FK hacia la PK existente `auth.users.id`.
@@ -598,7 +600,9 @@ El advisor de rendimiento informa dos FK de auditoría sin índice dedicado:
 `created_by_membership_id` e `invited_by_user_id`. Se conserva la decisión explícita
 de v1.1: agregar índices de actores de auditoría cuando una consulta real los justifique.
 
-La fase termina aquí: sin rewards, campañas, cupones, dashboard ni login UI móvil.
+La Fase 3 incorporó únicamente check-in y sesiones. El login móvil y el dashboard
+se implementaron posteriormente en las Fases 4 y 5; la Fase 6A incorpora la
+persistencia de beneficios y reglas descrita más abajo. Emisión y canje siguen pendientes.
 
 ## Fase 5: autorización comercial y revisión de visitas
 
@@ -769,6 +773,156 @@ rotación concurrente, aislamiento de labels/sucursales, OWNER explícito, rollb
 ante fallo de escritura y colisión de slugs. Recorre además por HTTP el PNG → check-in
 PENDING → SushiSession/conteo/cierre → confirmación comercial VERIFIED, preservando
 evidencia e historial al revocar el QR. No consume la visita del fixture manual.
+
+## Fase 6A: persistencia de beneficios y reglas
+
+Contrato: `Modelo_de_datos_MVP_Sushi_Counter_v1.1_Normalizado.docx`, diccionario de
+fidelización y secciones 9–11. Se agregaron sólo `Reward`, `RewardLocation`,
+`RewardRule` y cuatro enums: `RewardType`, `LifecycleStatus`, `RuleMetric`,
+`RuleOperator`. Prisma continúa limitado a `public`. No hay referencias Prisma
+a Coupon, Campaign o Redemption porque esos modelos todavía no existen.
+
+### Modelo y validaciones
+
+`Reward` pertenece a Restaurant, sin `locationId` directo. Sus importes y
+porcentajes usan `Decimal(12,2)`; moneda `char(3)`, referencia de producto
+`varchar(100)`, condiciones/descripción `text` y fechas `timestamptz(6)`.
+`RewardLocation` sólo contiene `(rewardId, locationId)`, PK compuesta y dos FK.
+`RewardRule` obtiene restaurante y alcance mediante Reward; no los duplica.
+
+Las restricciones SQL complementarias implementan:
+
+- Porcentaje: valor no nulo en `(0,100]` y moneda nula. Descuento fijo: valor
+  positivo y moneda obligatoria. Se excluye `NaN` y el formato de moneda exige
+  tres letras mayúsculas; no se agregó un catálogo ISO de monedas.
+- FREE_ITEM requiere referencia no vacía ni sólo espacios; CUSTOM requiere
+  términos explícitos. Los demás campos opcionales conservan la opcionalidad
+  del documento; guardar un tipo de descuento no calcula ni aplica descuentos.
+- `validDaysAfterIssue` es nulo o positivo, coherente con el requisito futuro
+  `Coupon.expiresAt > issuedAt`. No se calcula vencimiento de cupones en esta fase.
+- Toda ventana de Reward/RewardRule con ambos extremos exige `endsAt > startsAt`.
+  Ambos extremos son opcionales; no se presupone una ventana cerrada.
+- `VISIT_COUNT` y `GTE` son los únicos valores de sus enums. `threshold` es integer
+  positivo; `windowDays` es smallint positivo o NULL; `minVisitSpacingHours` es
+  smallint no negativo; `maxAwardsPerUser` es smallint igual a 1. Son datos de
+  configuración, no un motor de evaluación ni una garantía de emisión única aún.
+
+`minVisitSpacingHours` **no es** `CHECK_IN_WINDOW_MS`: la ventana operativa sigue
+siendo cuatro horas desde `Visit.checkedInAt`, por usuario y sucursal. No depende
+de `SushiSession.endedAt`. Se conservan `CHECK_IN_COOLDOWN`, la recuperación del
+conteo y la confirmación de “Sesión terminada” sólo con COMPLETED confirmado.
+
+### Alcance e integridad entre tablas
+
+Cero selecciones cubre todas las sucursales actuales y futuras del restaurante.
+Con selecciones se usa exactamente ese conjunto. Archivar una sucursal conserva
+sus asociaciones. Eliminar la última fila es una ampliación deliberada de alcance;
+no hay cascadas ni limpieza automática. Para suspender se cambia el estado del
+beneficio. TRUNCATE del puente se rechaza: el cambio debe ser un DELETE explícito,
+acotado y transaccional del futuro servicio autorizado.
+
+El trigger de asociaciones serializa INSERT/UPDATE/DELETE mediante una escritura
+de `updatedAt` en sus propietarios, bloqueando los UUID en orden. Dos constraint
+triggers diferidos comprueban el estado final de Reward y RewardLocation al COMMIT,
+incluidos ambos extremos de un cambio de asociación y un cambio de restaurante
+en Reward. La reasignación de RestaurantLocation ya está impedida por Fase 1;
+su trigger no fue modificado. Las FK usan RESTRICT para proteger referencias.
+
+Los futuros servicios que cambien varios beneficios deben bloquear primero los
+propietarios en orden y luego sus asociaciones. Ante 40001/40P01 se reintenta la
+transacción completa. La escritura del propietario también evita validaciones
+con una fotografía obsoleta bajo REPEATABLE READ. Se probaron ambos órdenes de
+una carrera entre selección y cambio de restaurante, además de ese aislamiento.
+
+### Migración y seguridad
+
+Migración nueva: `prisma/migrations/20261001060000_phase_6a_rewards_and_rules/migration.sql`.
+Parte de un diff local entre los esquemas Prisma anterior/nuevo, calificado con
+`public`, más SQL complementario. Contiene BEGIN/COMMIT para aplicación atómica.
+Agrega tres tablas, cuatro enums, tres PK, cuatro FK RESTRICT, diez CHECK y seis
+índices totales (tres de PK y tres de consulta, sin duplicarlos).
+
+Las tablas tienen RLS habilitado sin políticas de cliente; además se revocan sus
+permisos a PUBLIC, `anon` y `authenticated`. Las tres funciones nuevas usan
+SECURITY INVOKER y `search_path=pg_catalog`, sin EXECUTE para clientes. Los futuros
+servicios NestJS serán responsables de autorización y escrituras de negocio,
+como los módulos actuales. Ver la [guía de RLS de Supabase](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
+El SQL fue revisado y probado dentro de una transacción con ROLLBACK antes de
+aplicarse mediante `scripts/migrate-development.mjs deploy`, que comprueba el
+destino `sushi-session-dev`. No se usaron db push/reset ni se alteraron auth,
+storage, migraciones anteriores, `.env` o versiones de dependencias.
+
+Se compararon conteos y huellas de las nueve tablas existentes antes/después y
+los checksums del historial: se conservaron datos y migraciones, incluido el
+restaurante de prueba con sus visitas/sesiones. El historial Prisma está al día.
+El catálogo PostgreSQL verifica tipos, columnas, PK/FK, índices, CHECK, triggers,
+RLS y permisos. `prisma migrate diff` global no pudo introspectar la FK controlada
+`public.users -> auth.users` (P4002); no se añadió `auth` al datasource para evitar
+ese error y no se presenta ese comando como aprobado.
+
+El advisor de Supabase sólo agregó el aviso informativo esperado de RLS sin
+políticas en las tres tablas nuevas. Persisten los avisos previos sobre
+`rls_auto_enable()` y protección de contraseñas filtradas; esta fase no modifica
+esa función ni la configuración de Auth.
+
+### Pruebas y verificaciones
+
+```powershell
+pnpm prisma:validate
+pnpm prisma:generate
+pnpm typecheck:api
+pnpm lint:api
+pnpm build:api
+pnpm test:api:rewards
+pnpm test:api:persistence
+pnpm test:api:visits
+pnpm test:api:merchant
+pnpm test:api:auth
+pnpm test:api:config
+pnpm test:api:dev-qr
+pnpm test:mobile
+pnpm test:dashboard
+pnpm db:status
+```
+
+`test/rewards-persistence.integration.test.mjs` comprueba catálogo, valores válidos
+e inválidos, duplicados, pertenencia en inserciones/cambios, eliminación/archivo,
+vigencias, límites numéricos, permisos reales, Prisma Decimal y concurrencia.
+Los escenarios principales usan SAVEPOINT y ROLLBACK; las pruebas concurrentes
+crean dos restaurantes temporales con UUID propios y eliminan sólo esos fixtures.
+El modo opcional `REWARD_SCHEMA_PREVIEW=1` sirvió antes de migrar para ensayar el
+SQL con rollback; exige que `public.rewards` aún no exista. No usarlo tras aplicar.
+
+Resultado de esta fase: 83 pruebas nuevas y 174 de regresión de API aprobadas,
+24 móviles y 7 del dashboard. También se ejecutó el cliente móvil contra Supabase
+Auth/NestJS/PostgreSQL reales: recuperó visitas sin sesión, ACTIVE y COMPLETED,
+confirmó un cierre cuya respuesta se perdió y mantuvo Visit PENDING. Prisma
+validate/generate, TypeScript, lint y build de API aprobados. Las regresiones incluyen `/health`, `/me`, aislamiento comercial,
+verificación de visitas, idempotencia, cierre y bloqueo de cuatro horas.
+
+No existe `.github/workflows` en el árbol local ni en `main` del repositorio
+GitHub comprobado. Configurar CI queda pendiente; no se ejecutó ningún workflow
+remoto ni se atribuyen estas comprobaciones a GitHub Actions.
+
+### Pendientes deliberados
+
+No están implementados RewardEvaluationService, emisión de premios, puntos,
+Coupon y sus orígenes, Campaign, Redemption, endpoints de gestión ni pantallas.
+La futura evaluación deberá contar únicamente visitas VERIFIED, ordenar por
+`checkedInAt` e `id`, aplicar ventana/espaciado y emitir de forma idempotente.
+`pieceCount` no es criterio de recompensa.
+
+También queda pendiente congelar condiciones, FK y selecciones de Reward,
+RewardRule y Campaign después de la primera emisión, respaldado por los futuros
+orígenes de Coupon. Hoy no existe esa inmutabilidad ligada a emisión. El posterior
+desarrollo deberá impedir que una edición o eliminación de asociaciones cambie
+lo prometido en cupones emitidos, capturar snapshots y resolver expiración/canje.
+Pausar una definición no equivaldrá a revocar cupones.
+
+No hay fórmulas de descuento grupal ni distribución aprobada por importe promedio
+por comensal. La Fase 6A se detiene en persistencia validada, sin avanzar a emisión
+o canje.
 
 ## Referencias
 

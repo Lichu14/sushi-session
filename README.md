@@ -29,6 +29,12 @@ visitas y confirmación/rechazo desde un dashboard mínimo Next.js + TypeScript.
 Se utilizan los modelos existentes: no hubo nuevas migraciones ni cambios en Auth,
 Storage, rewards, campañas o cupones.
 
+La Fase 6A agrega únicamente persistencia para `Reward`, `RewardLocation` y
+`RewardRule`, con restricciones SQL y RLS. No hay evaluación, emisión, canje,
+cálculo de descuentos ni nuevas pantallas de beneficios. Las tres migraciones
+están aplicadas en `sushi-session-dev`; el contador y su recuperación conservan
+el comportamiento ya implementado.
+
 ## Estructura
 
 ```text
@@ -58,7 +64,7 @@ apps/
       auth/               # AuthGuard, CurrentUser, AuthProfileService y GET /me
       visits/             # CheckInService, SushiSessionService y sus endpoints
       merchant/           # Autorización por alcance y revisión de visitas
-    prisma/schema.prisma  # Nueve modelos y doce enums (Fases 1 y 3), solo public
+    prisma/schema.prisma  # Doce modelos y dieciséis enums (Fases 1, 3 y 6A), solo public
     prisma/migrations/    # Historial Prisma con integridad SQL adicional
     scripts/              # Migración y verificación limitadas a desarrollo
     test/                 # Configuración, catálogo, integridad, Prisma y HTTP
@@ -117,7 +123,8 @@ pnpm dev:mobile:web
 
 La vista web sirve como preview de UI/login; su sesión se mantiene solo en memoria.
 La API actual no habilita CORS para el navegador: el flujo de negocio soportado en
-esta fase es nativo. El dashboard tendrá su propio proyecto en `apps/dashboard`.
+esta fase es nativo. El dashboard comercial ya está implementado en `apps/dashboard`
+y usa su proxy Next.js para comunicarse con NestJS.
 Detener el servidor con Ctrl+C.
 
 ## Configuración de Expo y EAS
@@ -185,10 +192,10 @@ una compilación APK/IPA. El diagnóstico `expo-doctor` de la etapa inicial pas�
 
 ## Punto de revisión
 
-La etapa actual termina con la integración móvil de Fase 4 implementada y el
-cliente verificado contra `sushi-session-dev`. No se modificaron el modelo,
-migraciones ni la semántica PENDING/VERIFIED de Visit. No se implementaron rewards,
-campañas, cupones ni dashboard. La validación física en un teléfono queda pendiente.
+La etapa actual termina en Fase 6A: app móvil y dashboard comercial implementados,
+verificación de visitas disponible y persistencia de beneficios/reglas preparada.
+Quedan pendientes evaluación y emisión de beneficios, campañas, cupones y canje.
+Las pruebas automatizadas no sustituyen la aceptación física en un teléfono.
 La arquitectura, los contratos HTTP y las pruebas están en [apps/api/README.md](apps/api/README.md).
 
 ## API NestJS desde PowerShell
@@ -247,7 +254,7 @@ Más detalles en `apps/api/README.md`.
 
 Las migraciones revisadas se aplican con `pnpm db:migrate:dev`. Este comando verifica
 que la conexión corresponda exclusivamente al proyecto de desarrollo; no usa `db push`.
-Las migraciones de Fase 1 y Fase 3 ya están aplicadas; volver a ejecutarlo no recrea las tablas.
+Las migraciones de Fase 1, Fase 3 y Fase 6A ya están aplicadas; volver a ejecutarlo no recrea las tablas.
 
 Para repetir la prueba de login real y `GET /me`, completar el archivo local
 `apps/api/.env.auth-test` (ignorado por Git) según su plantilla y ejecutar:
@@ -343,6 +350,39 @@ la idempotencia, el modelo de datos ni las recompensas; no hay descuentos.
 Pruebas: `pnpm test:mobile`, `pnpm test:api:visits` y, con la configuración de
 desarrollo existente, `pnpm test:mobile:live`. Detalles y prueba manual en
 [la guía móvil](apps/mobile/README.md#sincronización-del-contador).
+
+## Beneficios y reglas: persistencia de Fase 6A
+
+- `Reward` pertenece al restaurante y guarda tipo, valor `Decimal(12,2)`, moneda,
+  condiciones y vigencia. No tiene una sucursal directa.
+- `RewardLocation` selecciona sucursales mediante PK compuesta. Cero filas significa
+  todas las sucursales del restaurante, incluidas las futuras. Archivar una sucursal
+  conserva sus asociaciones; borrar la última es un cambio explícito de alcance.
+- `RewardRule` hereda restaurante/alcance de Reward. Sólo admite `VISIT_COUNT`,
+  `GTE`, umbral entero positivo y `maxAwardsPerUser = 1`. Sus parámetros no cambian
+  la ventana operativa de check-in de cuatro horas.
+
+La migración `20261001060000_phase_6a_rewards_and_rules` es aditiva y sólo opera
+sobre `public`. Las tablas nuevas tienen RLS, sin políticas ni permisos para
+clientes directos. No hay endpoints nuevos. Se preservaron los datos existentes
+y el historial de migraciones; las dependencias y archivos `.env` no cambiaron.
+
+```powershell
+pnpm prisma:validate
+pnpm prisma:generate
+pnpm typecheck:api
+pnpm lint:api
+pnpm build:api
+pnpm test:api:rewards
+pnpm db:status
+```
+
+Contrato, restricciones, pruebas y pendientes:
+[Fase 6A en la guía de la API](apps/api/README.md#fase-6a-persistencia-de-beneficios-y-reglas).
+Se revisaron el árbol local y `.github/workflows` en `main` de GitHub: no hay
+workflows de CI. Configurarlos sigue pendiente; no se ejecutó ni se atribuye
+ningún resultado a GitHub Actions. Las verificaciones de esta fase son locales
+y las pruebas de integración usan únicamente `sushi-session-dev`.
 
 ## Referencias
 
